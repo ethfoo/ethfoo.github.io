@@ -8,6 +8,7 @@ title = "Ethfoo"
 # Change the default theme to be use when building the site with Hugo
 theme = "LoveIt"
 publishdir = "doc"
+ignoreErrors = ["error-remote-getjson"]
 
 
 [params]

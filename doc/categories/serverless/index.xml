@@ -1,0 +1,35 @@
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
+    <channel>
+        <title>serverless - 分类 - Ethfoo</title>
+        <link>http://example.org/categories/serverless/</link>
+        <description>serverless - 分类 - Ethfoo</description>
+        <generator>Hugo -- gohugo.io</generator><language>zh-cn</language><managingEditor>ethfoo@163.com (ethfoo)</managingEditor>
+            <webMaster>ethfoo@163.com (ethfoo)</webMaster><lastBuildDate>Fri, 06 Mar 2020 21:40:32 &#43;0800</lastBuildDate><atom:link href="http://example.org/categories/serverless/" rel="self" type="application/rss+xml" /><item>
+    <title>从HPA到KPA：Knative自动扩缩容深度分析</title>
+    <link>http://example.org/posts/knative%E4%B9%8B%E8%87%AA%E5%8A%A8%E6%89%A9%E7%BC%A9%E5%AE%B9/</link>
+    <pubDate>Fri, 06 Mar 2020 21:40:32 &#43;0800</pubDate>
+    <author>作者</author>
+    <guid>http://example.org/posts/knative%E4%B9%8B%E8%87%AA%E5%8A%A8%E6%89%A9%E7%BC%A9%E5%AE%B9/</guid>
+    <description><![CDATA[上篇文章主要聊的是流量和网络问题，这里我们探讨一下另外一个Knative的核心功能：自动扩缩容。本文只打算围绕一个核心的问题进行深入分析，即如何设计一个自动扩缩容系统，以及Knative又是如何实现的？
+如何设计一个自动扩缩容系统  自动扩缩容其实是一个相对广义的概念，这里我们只关注服务副本数的自动扩缩容，集群扩缩容和VPA则不会涉及。
+ 假设一下，如果让我们自研一个完善的自动扩缩容系统，会如何去实现呢？首先大致可以将要解决的问题抽象成以下几点：
+ 有哪些Metrics数据来决定扩缩容？ 如何采集这些Metrics数据？ 如何设计一个合理的自动扩缩容算法？  在Kubernetes集群下的自动扩缩容，很多人马上会联想到HPA，如果基于HPA来设计一个自动扩缩容系统，会面临什么样的挑战？
+1. 有哪些Metrics数据 HPA v1版本可以根据服务的CPU使用率来进行自动扩缩容。但是并非所有的系统都可以仅依靠CPU或者Memory指标来扩容，对于大多数 Web 应用的后端来说，基于每秒的请求数量进行弹性伸缩来处理突发流量会更加的靠谱，所以对于一个自动扩缩容系统来说，我们不能局限于CPU、Memory基础监控数据，每秒请求数RPS等自定义指标也是十分重要。
+幸运的是，HPA V2版本已经支持custom Metrics自定义指标。 Custom Metrics其实只是一个Kubernetes的接口，实际Metrics数据的提供，需要额外的扩展实现，可以自己写一个（参考：https://github.com/kubernetes-sigs/custom-Metrics-apiserver）或者使用开源的Prometheus adapter。如果自己实现custom-Metrics，可以自定义各种Metrics指标，使用Prometheus adapter则可以使用Prometheus中现有的一些指标数据。
+2. 如何采集Metrics数据 如果我们的系统默认依赖Prometheus，自定义的Metrics指标则可以从各种数据源或者exporter中获取，基于拉模型的Prometheus会定期从数据源中拉取数据。
+假设我们优先采用RPS指标作为系统的默认Metrics数据，可以考虑从网关采集或者使用注入Envoy sidecar等方式获取工作负载的流量指标。
+3. 如何自动扩缩容 K8s的HPA controller已经实现了一套简单的自动扩缩容逻辑，默认情况下，每30s检测一次指标，只要检测到了配置HPA的目标值，则会计算出预期的工作负载的副本数，再进行扩缩容操作。同时，为了避免过于频繁的扩缩容，默认在5min内没有重新扩缩容的情况下，才会触发扩缩容。
+不过，HPA本身的算法相对比较保守，可能并不适用于很多场景。例如，一个快速的流量突发场景，如果正处在5min内的HPA稳定期，这个时候根据HPA的策略，会导致无法扩容。 另外，在一些Serverless场景下，有缩容到0然后冷启动的需求，但HPA默认不支持。
+ 关于HPA支持缩容至0的讨论，可以参考issues（https://github.com/kubernetes/kubernetes/issues/69687），该PR（https://github.com/kubernetes/kubernetes/pull/74526）已经被merge，后面的版本可以通过featureGate设置开启，不过该功能是否应该由K8s本身去实现，社区仍然存在一些争议。
+ 如果我们的系统要实现支持缩容至0和冷启动的功能，并在生产环境真正可用的话，则需要考虑更多的细节。例如HPA是定时拉取Metrics数据再决定是否扩容，但这个时间间隔即使改成1s的话，对于冷启动来说还是太长，需要类似推送的机制才能避免延迟。
+总结一下，如果基于现有的HPA来实现一套Serverless自动扩缩容系统，并且默认使用流量作为扩缩容指标，大致需要：
+ 考虑使用网关等流量入口来实现流量Metrics的指标检测，并暴露出接口，供Prometheus或者自研组件来采集。 使用Prometheus adapter或者自研Custom Metrics的K8s接口实现，使得HPA controller可以获取到具体的Metrics数据。  这样便可以直接使用HPA的功能，实现了一个最简单的自动扩缩容系统。但是，仍然存在一些问题，比较棘手的是：
+ HPA无法缩容至0，也无法实现工作负载的冷启动。 HPA的扩容算法不一定适用流量突发场景，存在一定的隐患。  我们接下来一起探究一下Knative的实现，以及思考为什么Knative要这么设计，是不是有更好更优雅的方案呢？
+Knative的自动扩缩容实现 Knative相关组件 这里我们只关心数据面的组件： Queue-proxy 针对每个业务容器Knative都会自动注入一个sidecar容器，本质上是一个基于Golang的反向代理服务，主要功能是检测流量，暴露出RPS和concurrency数据供Autoscaler组件采集。另外，如果用户配置containerConcurrency，还会限制单个容器的并发请求数，超过并发数的请求，会被缓存下来放入队列，这也是Queue-proxy名称的含义。
+Autoscaler Autoscaler是自动扩缩容的核心控制组件，主要功能是采集Queue-proxy的Metrics数据，然后对比配置的数据，计算出预期的副本数，最后进行扩缩容操作。
+Activator Activator的引入，最开始的目的是在冷启动的时候，由于服务副本数为0，需要有一个组件来保持住请求，通知Autoscaler扩容对应的服务，然后再将请求发送至运行后的服务。除此之外，还承担了当流量瞬间突增的时候，缓存请求，等扩容完成后再代理发送至后端服务的功能。
+有哪些Metrics数据? HPA的Metrics来源一般是Pod的CPU或者Memory，当然也支持自定义的Metrics数据，不过对于大部分在线业务来说，并非CPU密集型，而是IO密集型，这意味着单纯依赖CPU来自动扩缩容往往并不满足实际需求，可能工作负载接收的流量已经很大了，延迟已经很高了，但是HPA还没有帮我们扩容服务。
+为了更好的满足这种情况，Knative KPA自动扩缩容则设计支持了请求并发（concurrency）和RPS（request-per-second）两种Metrics数据，相比CPU数据，这两者更贴近负载的load，更适合描述在线业务。数据源来自Activator组件和每个工作负载Pod，当然工作负载的Pod数据由Queue-proxy sidecar暴露出Metrics接口。
+RPS比较好理解，在一个采集周期内（默认1s），来一次http request，计数加1即可，比如1s内检测到来了100个请求，那么RPS就是100。 Concurrency可以理解为一个采集周期内正在处理http request的数量，比如1s内有50个请求正在被处理则Concurrency为50。实际上Knative会记录request来的时刻和返回的时刻，如果1s内只有一个请求，并且处理了500ms即返回，则Concurrency为0.]]></description>
+</item></channel>
+</rss>
