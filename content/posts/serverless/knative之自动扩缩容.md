@@ -4,8 +4,8 @@ date: 2020-07-01T21:40:32+08:00
 draft: false
 description: "这里我们探讨一下另外一个Knative的核心功能：自动扩缩容。"
 
-tags: ["serverless", "knative"]
-categories: ["serverless"]
+tags: ["Serverless", "Knative"]
+categories: ["Serverless"]
 
 toc:
   auto: false

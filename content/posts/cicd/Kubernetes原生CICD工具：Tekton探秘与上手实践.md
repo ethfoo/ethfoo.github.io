@@ -12,8 +12,8 @@ toc:
 ## 引子  
 如果有关注过Knative社区动态的同学，可能会知道最近发生了一件比较大的新闻，三大组件之一的build项目被人提了一个很残忍的Proposal（`https://github.com/knative/build/issues/614`），并且专门在项目Readme的开头加了个NOTE：
 
-{{< admonition >}}
-🚨 NOTE: There is an open proposal to deprecate this component in favor of Tekton Pipelines. If you are a new user, consider using Tekton Pipelines, or another tool, to build and release. If you use Knative Build today, please give feedback on the deprecation proposal.
+{{< admonition note "NOTE" >}}
+There is an open proposal to deprecate this component in favor of Tekton Pipelines. If you are a new user, consider using Tekton Pipelines, or another tool, to build and release. If you use Knative Build today, please give feedback on the deprecation proposal.
 {{< /admonition >}}
 
 

@@ -1,14 +1,14 @@
 <rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
     <channel>
-        <title>golang - Tag - Ethfoo&#39;s Blog</title>
+        <title>Golang - 标签 - Ethfoo&#39;s Blog</title>
         <link>http://example.org/tags/golang/</link>
-        <description>golang - Tag - Ethfoo&#39;s Blog</description>
+        <description>Golang - 标签 - Ethfoo&#39;s Blog</description>
         <generator>Hugo -- gohugo.io</generator><language>en</language><managingEditor>ethfoo@163.com (ethfoo)</managingEditor>
             <webMaster>ethfoo@163.com (ethfoo)</webMaster><lastBuildDate>Thu, 12 Mar 2020 20:24:44 &#43;0800</lastBuildDate><atom:link href="http://example.org/tags/golang/" rel="self" type="application/rss+xml" /><item>
     <title>基于Golang的云原生日志采集服务设计与实践</title>
     <link>http://example.org/posts/logging/%E5%9F%BA%E4%BA%8Egolang%E7%9A%84%E4%BA%91%E5%8E%9F%E7%94%9F%E6%97%A5%E5%BF%97%E9%87%87%E9%9B%86%E6%9C%8D%E5%8A%A1%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E8%B7%B5/</link>
     <pubDate>Thu, 12 Mar 2020 20:24:44 &#43;0800</pubDate>
-    <author>Author</author>
+    <author>作者</author>
     <guid>http://example.org/posts/logging/%E5%9F%BA%E4%BA%8Egolang%E7%9A%84%E4%BA%91%E5%8E%9F%E7%94%9F%E6%97%A5%E5%BF%97%E9%87%87%E9%9B%86%E6%9C%8D%E5%8A%A1%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E8%B7%B5/</guid>
     <description><![CDATA[本文基于笔者 2019 Golang meetup 杭州站分享整理
  一、背景 云原生技术大潮已经来临，技术变革迫在眉睫。

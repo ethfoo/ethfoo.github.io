@@ -2,8 +2,8 @@
 title: "容器日志采集利器：Filebeat深度剖析与实践"
 date: 2019-07-13T10:12:46+08:00
 draft: false
-tags: ["filebeat", "logging"]
-categories: ["logging"]
+tags: ["Filebeat", "Logging"]
+categories: ["Logging"]
 toc:
   auto: false
 ---

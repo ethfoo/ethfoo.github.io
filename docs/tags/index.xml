@@ -1,63 +1,63 @@
 <rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
     <channel>
-        <title>Tags - Tag - Ethfoo&#39;s Blog</title>
+        <title>Tags - 标签 - Ethfoo&#39;s Blog</title>
         <link>http://example.org/tags/</link>
-        <description>Tags - Tag - Ethfoo&#39;s Blog</description>
+        <description>Tags - 标签 - Ethfoo&#39;s Blog</description>
         <generator>Hugo -- gohugo.io</generator><language>en</language><managingEditor>ethfoo@163.com (ethfoo)</managingEditor>
             <webMaster>ethfoo@163.com (ethfoo)</webMaster><lastBuildDate>Wed, 01 Jul 2020 21:40:32 &#43;0800</lastBuildDate><atom:link href="http://example.org/tags/" rel="self" type="application/rss+xml" /><item>
-    <title>knative</title>
+    <title>Knative</title>
     <link>http://example.org/tags/knative/</link>
     <pubDate>Wed, 01 Jul 2020 21:40:32 &#43;0800</pubDate>
-    <author>Author</author>
+    <author>作者</author>
     <guid>http://example.org/tags/knative/</guid>
     <description><![CDATA[]]></description>
 </item><item>
-    <title>serverless</title>
+    <title>Serverless</title>
     <link>http://example.org/tags/serverless/</link>
     <pubDate>Wed, 01 Jul 2020 21:40:32 &#43;0800</pubDate>
-    <author>Author</author>
+    <author>作者</author>
     <guid>http://example.org/tags/serverless/</guid>
     <description><![CDATA[]]></description>
 </item><item>
-    <title>golang</title>
+    <title>Golang</title>
     <link>http://example.org/tags/golang/</link>
     <pubDate>Thu, 12 Mar 2020 20:24:44 &#43;0800</pubDate>
-    <author>Author</author>
+    <author>作者</author>
     <guid>http://example.org/tags/golang/</guid>
     <description><![CDATA[]]></description>
 </item><item>
-    <title>logging</title>
+    <title>Logging</title>
     <link>http://example.org/tags/logging/</link>
     <pubDate>Thu, 12 Mar 2020 20:24:44 &#43;0800</pubDate>
-    <author>Author</author>
+    <author>作者</author>
     <guid>http://example.org/tags/logging/</guid>
     <description><![CDATA[]]></description>
 </item><item>
     <title>CICD</title>
     <link>http://example.org/tags/cicd/</link>
     <pubDate>Sun, 25 Aug 2019 20:36:15 &#43;0800</pubDate>
-    <author>Author</author>
+    <author>作者</author>
     <guid>http://example.org/tags/cicd/</guid>
     <description><![CDATA[]]></description>
 </item><item>
     <title>DevOps</title>
     <link>http://example.org/tags/devops/</link>
     <pubDate>Sun, 25 Aug 2019 20:36:15 &#43;0800</pubDate>
-    <author>Author</author>
+    <author>作者</author>
     <guid>http://example.org/tags/devops/</guid>
     <description><![CDATA[]]></description>
 </item><item>
     <title>Tekton</title>
     <link>http://example.org/tags/tekton/</link>
     <pubDate>Sun, 25 Aug 2019 20:36:15 &#43;0800</pubDate>
-    <author>Author</author>
+    <author>作者</author>
     <guid>http://example.org/tags/tekton/</guid>
     <description><![CDATA[]]></description>
 </item><item>
-    <title>filebeat</title>
+    <title>Filebeat</title>
     <link>http://example.org/tags/filebeat/</link>
     <pubDate>Sat, 13 Jul 2019 10:12:46 &#43;0800</pubDate>
-    <author>Author</author>
+    <author>作者</author>
     <guid>http://example.org/tags/filebeat/</guid>
     <description><![CDATA[]]></description>
 </item></channel>

@@ -2,8 +2,8 @@
 title: "基于Golang的云原生日志采集服务设计与实践"
 date: 2020-03-12T20:24:44+08:00
 draft: false
-tags: ["logging", "golang"]
-categories: ["logging"]
+tags: ["Logging", "Golang"]
+categories: ["Logging"]
 toc:
   auto: false
 ---
