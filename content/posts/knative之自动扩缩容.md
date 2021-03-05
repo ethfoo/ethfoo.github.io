@@ -1,7 +1,6 @@
 ---
 title: "从HPA到KPA：Knative自动扩缩容深度分析"
-date: 2021-03-06T21:40:32+08:00
-lastmod: 2021-03-06T21:40:32+08:00
+date: 2020-05-09T21:40:32+08:00
 draft: false
 description: "这里我们探讨一下另外一个Knative的核心功能：自动扩缩容。"
 

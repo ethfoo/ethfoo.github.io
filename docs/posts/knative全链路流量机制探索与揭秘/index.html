@@ -27,8 +27,8 @@ apiVersion:networking.istio.io/v1alpha3kind:VirtualServicemetadata:name:route-f8
 apiVersion: serving.knative.dev/v1alpha1 kind: Service metadata: name: hello-go namespace: faas spec: template: spec: containers: - image: harbor-yx-jd-dev.yx.netease.com/library/helloworld-go:v0.1 env: - name: TARGET value: &quot;Go Sample v1&quot; virtualservice的变化 笔者的环境可简单的认为是一个标准的Istio部署，Serverless网关为Istio Ingress Gateway，所以创建完ksvc后，为了验证服务是否可以正常运行，需要发送http请求至网关。Gateway资源已经在部署Knative的时候创建，这里我们只需要关心vs。在服务副本数为0的时候，Knative控制器创建的vs关键配置如下：" />
 <meta property="og:type" content="article" />
 <meta property="og:url" content="http://example.org/posts/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98/" /><meta property="article:section" content="posts" />
-<meta property="article:published_time" content="2021-03-05T09:51:34&#43;08:00" />
-<meta property="article:modified_time" content="2021-03-05T09:51:34&#43;08:00" />
+<meta property="article:published_time" content="2020-04-05T09:51:34&#43;08:00" />
+<meta property="article:modified_time" content="2020-04-05T09:51:34&#43;08:00" />
 
 <meta name="twitter:card" content="summary"/>
 <meta name="twitter:title" content="Knative全链路流量机制探索与揭秘"/>
@@ -54,7 +54,7 @@ apiVersion: serving.knative.dev/v1alpha1 kind: Service metadata: name: hello-go 
 <meta name="application-name" content="Ethfoo">
 <meta name="apple-mobile-web-app-title" content="Ethfoo"><link rel="shortcut icon" type="image/x-icon" href="/favicon.ico" />
         <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
-        <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"><link rel="manifest" href="/site.webmanifest"><link rel="canonical" href="http://example.org/posts/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98/" /><link rel="stylesheet" href="/lib/normalize/normalize.min.css"><link rel="stylesheet" href="/css/style.min.css"><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><script type="application/ld+json">
+        <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"><link rel="manifest" href="/site.webmanifest"><link rel="canonical" href="http://example.org/posts/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98/" /><link rel="next" href="http://example.org/posts/knative%E4%B9%8B%E8%87%AA%E5%8A%A8%E6%89%A9%E7%BC%A9%E5%AE%B9/" /><link rel="stylesheet" href="/lib/normalize/normalize.min.css"><link rel="stylesheet" href="/css/style.min.css"><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><script type="application/ld+json">
     {
         "@context": "http://schema.org",
         "@type": "BlogPosting",
@@ -64,7 +64,7 @@ apiVersion: serving.knative.dev/v1alpha1 kind: Service metadata: name: hello-go 
             "@type": "WebPage",
             "@id": "http:\/\/example.org\/posts\/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98\/"
         },"genre": "posts","keywords": "serverless, knative","wordcount":  277 ,
-        "url": "http:\/\/example.org\/posts\/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98\/","datePublished": "2021-03-05T09:51:34+08:00","dateModified": "2021-03-05T09:51:34+08:00","publisher": {
+        "url": "http:\/\/example.org\/posts\/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98\/","datePublished": "2020-04-05T09:51:34+08:00","dateModified": "2020-04-05T09:51:34+08:00","publisher": {
             "@type": "Organization",
             "name": "ethfoo"},"author": {
                 "@type": "Person",
@@ -113,7 +113,7 @@ apiVersion: serving.knative.dev/v1alpha1 kind: Service metadata: name: hello-go 
             <div class="toc-content always-active" id="toc-content-auto"></div>
         </div><article class="page single"><h1 class="single-title animated flipInX">Knative全链路流量机制探索与揭秘</h1><div class="post-meta">
             <div class="post-meta-line"><span class="post-author"><a href="https://github.com/ethfoo" title="Author" target="_blank" rel="noopener noreffer author" class="author"><i class="fas fa-user-circle fa-fw"></i>ethfoo</a></span>&nbsp;<span class="post-category">收录于 <a href="/categories/serverless/"><i class="far fa-folder fa-fw"></i>serverless</a></span></div>
-            <div class="post-meta-line"><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2021-03-05">2021-03-05</time>&nbsp;</div>
+            <div class="post-meta-line"><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2020-04-05">2020-04-05</time>&nbsp;</div>
         </div><div class="details toc" id="toc-static"  kept="">
                 <div class="details-summary toc-title">
                     <span>目录</span>
@@ -345,7 +345,7 @@ hello-go-fpmln   Serve   hello-go-fpmln   hello-go-fpmln-m9mmg   True
     <div class="post-info">
         <div class="post-info-line">
             <div class="post-info-mod">
-                <span>更新于 2021-03-05</span>
+                <span>更新于 2020-04-05</span>
             </div>
             <div class="post-info-license"></div>
         </div>
@@ -364,7 +364,8 @@ hello-go-fpmln   Serve   hello-go-fpmln   hello-go-fpmln-m9mmg   True
         </section>
     </div>
 
-    <div class="post-nav"></div>
+    <div class="post-nav">
+            <a href="/posts/knative%E4%B9%8B%E8%87%AA%E5%8A%A8%E6%89%A9%E7%BC%A9%E5%AE%B9/" class="next" rel="next" title="从HPA到KPA：Knative自动扩缩容深度分析">从HPA到KPA：Knative自动扩缩容深度分析<i class="fas fa-angle-right fa-fw"></i></a></div>
 </div>
 </article></div>
             </main><footer class="footer">
