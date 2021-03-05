@@ -2,7 +2,8 @@
 title: "Knative全链路流量机制探索与揭秘"
 date: 2021-03-05T09:51:34+08:00
 draft: false
-
+tags: ["serverless", "knative"]
+categories: ["serverless"]
 toc:
   auto: false
 ---

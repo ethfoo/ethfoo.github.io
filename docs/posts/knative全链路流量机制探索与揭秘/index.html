@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge, chrome=1">
+        <title>Knative全链路流量机制探索与揭秘 - Ethfoo</title><meta name="Description" content=""><meta property="og:title" content="Knative全链路流量机制探索与揭秘" />
+<meta property="og:description" content="引子——从自动扩缩容说起 服务接收到流量请求后，从0自动扩容为N，以及没有流量时自动缩容为0，是Serverless平台最核心的一个特征。
+可以说，自动扩缩容机制是那颗皇冠，戴上之后才能被称之为Serverless。
+当然了解Kubernetes的人会有疑问，HPA不就是用来干自动扩缩容的事儿的吗？难道我用了HPA就可以摇身一变成为Serverless了。
+这里有一点关键的区别在于，Serverless语义下的自动扩缩容是可以让服务从0到N的，但是HPA不能。HPA的机制是检测服务Pod的metrics数据（例如CPU等）然后把Deployment扩容，但当你把Deployment副本数置为0时，流量进不来，metrics数据永远为0，此时HPA也无能为力。
+所以HPA只能让服务从1到N，而从0到1的这个过程，需要额外的机制帮助hold住请求流量，扩容服务，再转发流量到服务，这就是我们常说的冷启动。
+可以说，冷启动是Serverless皇冠中的那颗明珠，如何实现更好、更快的冷启动，是所有Serverless平台极致追求的目标。
+Knative作为目前被社区和各大厂商如此重视和受关注的Serverless平台，当然也在不遗余力的优化自动扩缩容和冷启动功能。
+不过，本文并不打算直接介绍Knative自动扩缩容机制，而是先探究一下Knative中的流量实现机制，流量机制和自动扩容密切相关，只有了解其中的奥秘，才能更好的理解Knative autoscale功能。
+由于Knative其实包括Building(Tekton)、Serving和Eventing，这里只专注于Serving部分。 另外需要提前说明的是，Knative并不强依赖Istio，Serverless网关的实际选择除了集成Istio，还支持Gloo、Ambassador等。同时，即使使用了Istio，也可以选择是否使用envoy sidecar注入。本文介绍的时候，我们默认使用的是Istio和注入sidecar的部署方式。
+简单但是有点过时的老版流量机制 整体架构回顾 先回顾一下Knative官方的一个简单的原理示意图如下所示。用户创建一个Knative Service（ksvc）后，Knative会自动创建Route（route）、Configuration（cfg）资源，然后cfg会创建对应的Revision（rev）版本。rev实际上又会创建Deployment提供服务，流量最终会根据route的配置，导入到相应的rev中。
+这是简单的CRD视角，实际上Knative的内部CRD会多一些层次结构，相对更复杂一点。下文会详细描述。
+冷启动时的流量转发 从冷启动和自动扩缩容的实现角度，可以参考一下下图 。从图中可以大概看到，有一个Route充当网关的角色，当服务副本数为0时，自动将请求转发到Activator组件，Activator会保持请求，同时Autoscaler组件会负责将副本数扩容，之后Activator再将请求导入到实际的Pod，并且在副本数不为0时，Route会直接将流量负载均衡到Pod，不再走Activator组件。这也是Knative实现冷启动的一个基本思路。
+在集成使用Istio部署时，Route默认采用的是Istio Ingress Gateway实现，大概在Knative 0.6版本之前，我们可以发现，Route的流量转发本质上是由Istio virtualservice（vs）控制。副本数为0时，vs如下所示，其中destination指向的是Activator组件。此时Activator会帮助转发冷启动时的请求。
+apiVersion:networking.istio.io/v1alpha3kind:VirtualServicemetadata:name:route-f8c50d56-3f47-11e9-9a9a-08002715c9e6spec:gateways:- knative-ingress-gateway- meshhosts:- helloworld-go.default.example.com- helloworld-go.default.svc.cluster.localhttp:- appendHeaders:route:- destination:host:Activator-Service.knative-serving.svc.cluster.localport:number:80weight:100当服务副本数不为0之后，vs变为如下所示，将Ingress Gateway的流量直接转发到服务Pod上。
+apiVersion:networking.istio.io/v1alpha3kind:VirtualServicemetadata:name:route-f8c50d56-3f47-11e9-9a9a-08002715c9e6spec:hosts:- helloworld-go.default.example.com- helloworld-go.default.svc.cluster.localhttp:- match:route:- destination:host:helloworld-go-2xxcn-Service.default.svc.cluster.localport:number:80weight:100我们可以很明显的看出，Knative就是通过修改vs的destination host来实现冷启动中的流量保持和转发。
+相信目前你在网上能找到资料，也基本上停留在该阶段。不过，由于Knative的快速迭代，这里的一些实现细节分析已经过时。
+下面以0.9版本为例，我们仔细探究一下现有的实现方式，和关于Knative流量的真正秘密。
+复杂但是更优异的新版流量机制 鉴于官方文档并没有最新的具体实现机制介绍，我们创建一个简单的hello-go ksvc，并以此进行分析。ksvc如下所示：
+apiVersion: serving.knative.dev/v1alpha1 kind: Service metadata: name: hello-go namespace: faas spec: template: spec: containers: - image: harbor-yx-jd-dev.yx.netease.com/library/helloworld-go:v0.1 env: - name: TARGET value: &quot;Go Sample v1&quot; virtualservice的变化 笔者的环境可简单的认为是一个标准的Istio部署，Serverless网关为Istio Ingress Gateway，所以创建完ksvc后，为了验证服务是否可以正常运行，需要发送http请求至网关。Gateway资源已经在部署Knative的时候创建，这里我们只需要关心vs。在服务副本数为0的时候，Knative控制器创建的vs关键配置如下：" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="http://example.org/posts/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98/" /><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2021-03-05T09:51:34&#43;08:00" />
+<meta property="article:modified_time" content="2021-03-05T09:51:34&#43;08:00" />
+
+<meta name="twitter:card" content="summary"/>
+<meta name="twitter:title" content="Knative全链路流量机制探索与揭秘"/>
+<meta name="twitter:description" content="引子——从自动扩缩容说起 服务接收到流量请求后，从0自动扩容为N，以及没有流量时自动缩容为0，是Serverless平台最核心的一个特征。
+可以说，自动扩缩容机制是那颗皇冠，戴上之后才能被称之为Serverless。
+当然了解Kubernetes的人会有疑问，HPA不就是用来干自动扩缩容的事儿的吗？难道我用了HPA就可以摇身一变成为Serverless了。
+这里有一点关键的区别在于，Serverless语义下的自动扩缩容是可以让服务从0到N的，但是HPA不能。HPA的机制是检测服务Pod的metrics数据（例如CPU等）然后把Deployment扩容，但当你把Deployment副本数置为0时，流量进不来，metrics数据永远为0，此时HPA也无能为力。
+所以HPA只能让服务从1到N，而从0到1的这个过程，需要额外的机制帮助hold住请求流量，扩容服务，再转发流量到服务，这就是我们常说的冷启动。
+可以说，冷启动是Serverless皇冠中的那颗明珠，如何实现更好、更快的冷启动，是所有Serverless平台极致追求的目标。
+Knative作为目前被社区和各大厂商如此重视和受关注的Serverless平台，当然也在不遗余力的优化自动扩缩容和冷启动功能。
+不过，本文并不打算直接介绍Knative自动扩缩容机制，而是先探究一下Knative中的流量实现机制，流量机制和自动扩容密切相关，只有了解其中的奥秘，才能更好的理解Knative autoscale功能。
+由于Knative其实包括Building(Tekton)、Serving和Eventing，这里只专注于Serving部分。 另外需要提前说明的是，Knative并不强依赖Istio，Serverless网关的实际选择除了集成Istio，还支持Gloo、Ambassador等。同时，即使使用了Istio，也可以选择是否使用envoy sidecar注入。本文介绍的时候，我们默认使用的是Istio和注入sidecar的部署方式。
+简单但是有点过时的老版流量机制 整体架构回顾 先回顾一下Knative官方的一个简单的原理示意图如下所示。用户创建一个Knative Service（ksvc）后，Knative会自动创建Route（route）、Configuration（cfg）资源，然后cfg会创建对应的Revision（rev）版本。rev实际上又会创建Deployment提供服务，流量最终会根据route的配置，导入到相应的rev中。
+这是简单的CRD视角，实际上Knative的内部CRD会多一些层次结构，相对更复杂一点。下文会详细描述。
+冷启动时的流量转发 从冷启动和自动扩缩容的实现角度，可以参考一下下图 。从图中可以大概看到，有一个Route充当网关的角色，当服务副本数为0时，自动将请求转发到Activator组件，Activator会保持请求，同时Autoscaler组件会负责将副本数扩容，之后Activator再将请求导入到实际的Pod，并且在副本数不为0时，Route会直接将流量负载均衡到Pod，不再走Activator组件。这也是Knative实现冷启动的一个基本思路。
+在集成使用Istio部署时，Route默认采用的是Istio Ingress Gateway实现，大概在Knative 0.6版本之前，我们可以发现，Route的流量转发本质上是由Istio virtualservice（vs）控制。副本数为0时，vs如下所示，其中destination指向的是Activator组件。此时Activator会帮助转发冷启动时的请求。
+apiVersion:networking.istio.io/v1alpha3kind:VirtualServicemetadata:name:route-f8c50d56-3f47-11e9-9a9a-08002715c9e6spec:gateways:- knative-ingress-gateway- meshhosts:- helloworld-go.default.example.com- helloworld-go.default.svc.cluster.localhttp:- appendHeaders:route:- destination:host:Activator-Service.knative-serving.svc.cluster.localport:number:80weight:100当服务副本数不为0之后，vs变为如下所示，将Ingress Gateway的流量直接转发到服务Pod上。
+apiVersion:networking.istio.io/v1alpha3kind:VirtualServicemetadata:name:route-f8c50d56-3f47-11e9-9a9a-08002715c9e6spec:hosts:- helloworld-go.default.example.com- helloworld-go.default.svc.cluster.localhttp:- match:route:- destination:host:helloworld-go-2xxcn-Service.default.svc.cluster.localport:number:80weight:100我们可以很明显的看出，Knative就是通过修改vs的destination host来实现冷启动中的流量保持和转发。
+相信目前你在网上能找到资料，也基本上停留在该阶段。不过，由于Knative的快速迭代，这里的一些实现细节分析已经过时。
+下面以0.9版本为例，我们仔细探究一下现有的实现方式，和关于Knative流量的真正秘密。
+复杂但是更优异的新版流量机制 鉴于官方文档并没有最新的具体实现机制介绍，我们创建一个简单的hello-go ksvc，并以此进行分析。ksvc如下所示：
+apiVersion: serving.knative.dev/v1alpha1 kind: Service metadata: name: hello-go namespace: faas spec: template: spec: containers: - image: harbor-yx-jd-dev.yx.netease.com/library/helloworld-go:v0.1 env: - name: TARGET value: &quot;Go Sample v1&quot; virtualservice的变化 笔者的环境可简单的认为是一个标准的Istio部署，Serverless网关为Istio Ingress Gateway，所以创建完ksvc后，为了验证服务是否可以正常运行，需要发送http请求至网关。Gateway资源已经在部署Knative的时候创建，这里我们只需要关心vs。在服务副本数为0的时候，Knative控制器创建的vs关键配置如下："/>
+<meta name="application-name" content="Ethfoo">
+<meta name="apple-mobile-web-app-title" content="Ethfoo"><link rel="shortcut icon" type="image/x-icon" href="/favicon.ico" />
+        <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+        <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"><link rel="manifest" href="/site.webmanifest"><link rel="canonical" href="http://example.org/posts/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98/" /><link rel="prev" href="http://example.org/posts/knative%E4%B9%8B%E8%87%AA%E5%8A%A8%E6%89%A9%E7%BC%A9%E5%AE%B9/" /><link rel="stylesheet" href="/lib/normalize/normalize.min.css"><link rel="stylesheet" href="/css/style.min.css"><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "Knative全链路流量机制探索与揭秘",
+        "inLanguage": "zh-cn",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "http:\/\/example.org\/posts\/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98\/"
+        },"genre": "posts","keywords": "serverless, knative","wordcount":  277 ,
+        "url": "http:\/\/example.org\/posts\/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98\/","datePublished": "2021-03-05T09:51:34+08:00","dateModified": "2021-03-05T09:51:34+08:00","publisher": {
+            "@type": "Organization",
+            "name": "ethfoo"},"author": {
+                "@type": "Person",
+                "name": "ethfoo"
+            },"description": ""
+    }
+    </script></head>
+    <body header-desktop="" header-mobile=""><script type="text/javascript">(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : '' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="Ethfoo">Ethfoo</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> Posts </a><a class="menu-item" href="/tags/"> Tags </a><a class="menu-item" href="/categories/"> Categories </a><span class="menu-item delimiter"></span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="Ethfoo">Ethfoo</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><a class="menu-item" href="/posts/" title="">Posts</a><a class="menu-item" href="/tags/" title="">Tags</a><a class="menu-item" href="/categories/" title="">Categories</a><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+                <i class="fas fa-adjust fa-fw"></i>
+            </a></div>
+    </div>
+</header>
+<div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div>
+<main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">目录</h2>
+            <div class="toc-content always-active" id="toc-content-auto"></div>
+        </div><article class="page single"><h1 class="single-title animated flipInX">Knative全链路流量机制探索与揭秘</h1><div class="post-meta">
+            <div class="post-meta-line"><span class="post-author"><a href="https://github.com/ethfoo" title="Author" target="_blank" rel="noopener noreffer author" class="author"><i class="fas fa-user-circle fa-fw"></i>ethfoo</a></span>&nbsp;<span class="post-category">收录于 <a href="/categories/serverless/"><i class="far fa-folder fa-fw"></i>serverless</a></span></div>
+            <div class="post-meta-line"><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2021-03-05">2021-03-05</time>&nbsp;</div>
+        </div><div class="details toc" id="toc-static"  kept="">
+                <div class="details-summary toc-title">
+                    <span>目录</span>
+                    <span><i class="details-icon fas fa-angle-right"></i></span>
+                </div>
+                <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#引子从自动扩缩容说起">引子——从自动扩缩容说起</a></li>
+    <li><a href="#简单但是有点过时的老版流量机制">简单但是有点过时的老版流量机制</a>
+      <ul>
+        <li><a href="#整体架构回顾">整体架构回顾</a></li>
+        <li><a href="#冷启动时的流量转发">冷启动时的流量转发</a></li>
+      </ul>
+    </li>
+    <li><a href="#复杂但是更优异的新版流量机制">复杂但是更优异的新版流量机制</a>
+      <ul>
+        <li><a href="#virtualservice的变化">virtualservice的变化</a></li>
+        <li><a href="#revision-service探索">revision service探索</a></li>
+        <li><a href="#流量路径">流量路径</a></li>
+      </ul>
+    </li>
+    <li><a href="#总结">总结</a></li>
+  </ul>
+</nav></div>
+            </div><div class="content" id="content"><h2 id="引子从自动扩缩容说起">引子——从自动扩缩容说起</h2>
+<p>服务接收到流量请求后，从0自动扩容为N，以及没有流量时自动缩容为0，是Serverless平台最核心的一个特征。<br>
+可以说，自动扩缩容机制是那颗皇冠，戴上之后才能被称之为Serverless。<br>
+当然了解Kubernetes的人会有疑问，HPA不就是用来干自动扩缩容的事儿的吗？难道我用了HPA就可以摇身一变成为Serverless了。<br>
+这里有一点关键的区别在于，Serverless语义下的自动扩缩容是可以让服务从0到N的，但是HPA不能。HPA的机制是检测服务Pod的metrics数据（例如CPU等）然后把Deployment扩容，但当你把Deployment副本数置为0时，流量进不来，metrics数据永远为0，此时HPA也无能为力。<br>
+所以HPA只能让服务从1到N，而从0到1的这个过程，需要额外的机制帮助hold住请求流量，扩容服务，再转发流量到服务，这就是我们常说的<code>冷启动</code>。<br>
+可以说，<code>冷启动</code>是Serverless皇冠中的那颗明珠，如何实现更好、更快的冷启动，是所有Serverless平台极致追求的目标。<br>
+Knative作为目前被社区和各大厂商如此重视和受关注的Serverless平台，当然也在不遗余力的优化自动扩缩容和冷启动功能。<br>
+不过，本文并不打算直接介绍Knative自动扩缩容机制，而是先探究一下Knative中的流量实现机制，流量机制和自动扩容密切相关，只有了解其中的奥秘，才能更好的理解Knative autoscale功能。<br>
+由于Knative其实包括Building(Tekton)、Serving和Eventing，这里只专注于Serving部分。
+另外需要提前说明的是，Knative并不强依赖Istio，Serverless网关的实际选择除了集成Istio，还支持Gloo、Ambassador等。同时，即使使用了Istio，也可以选择是否使用envoy sidecar注入。本文介绍的时候，我们默认使用的是Istio和注入sidecar的部署方式。</p>
+<h2 id="简单但是有点过时的老版流量机制">简单但是有点过时的老版流量机制</h2>
+<h3 id="整体架构回顾">整体架构回顾</h3>
+<p>先回顾一下Knative官方的一个简单的原理示意图如下所示。用户创建一个Knative Service（ksvc）后，Knative会自动创建Route（route）、Configuration（cfg）资源，然后cfg会创建对应的Revision（rev）版本。rev实际上又会创建Deployment提供服务，流量最终会根据route的配置，导入到相应的rev中。<br>
+<img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-serving-0.png"
+        data-srcset="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-serving-0.png, https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-serving-0.png 1.5x, https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-serving-0.png 2x"
+        data-sizes="auto"
+        alt="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-serving-0.png"
+        title="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-serving-0.png" /></p>
+<p>这是简单的CRD视角，实际上Knative的内部CRD会多一些层次结构，相对更复杂一点。下文会详细描述。</p>
+<h3 id="冷启动时的流量转发">冷启动时的流量转发</h3>
+<p>从冷启动和自动扩缩容的实现角度，可以参考一下下图 。从图中可以大概看到，有一个Route充当网关的角色，当服务副本数为0时，自动将请求转发到Activator组件，Activator会保持请求，同时Autoscaler组件会负责将副本数扩容，之后Activator再将请求导入到实际的Pod，并且在副本数不为0时，Route会直接将流量负载均衡到Pod，不再走Activator组件。这也是Knative实现冷启动的一个基本思路。<br>
+<img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-active.png"
+        data-srcset="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-active.png, https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-active.png 1.5x, https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-active.png 2x"
+        data-sizes="auto"
+        alt="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-active.png"
+        title="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-active.png" /></p>
+<p>在集成使用Istio部署时，Route默认采用的是Istio Ingress Gateway实现，大概在Knative 0.6版本之前，我们可以发现，Route的流量转发本质上是由Istio virtualservice（vs）控制。副本数为0时，vs如下所示，其中destination指向的是Activator组件。此时Activator会帮助转发冷启动时的请求。</p>
+<div class="highlight"><pre class="chroma"><code class="language-yaml" data-lang="yaml"><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l">networking.istio.io/v1alpha3</span><span class="w">
+</span><span class="w"></span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l">VirtualService</span><span class="w">
+</span><span class="w"></span><span class="nt">metadata</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l">route-f8c50d56-3f47-11e9-9a9a-08002715c9e6</span><span class="w">
+</span><span class="w"></span><span class="nt">spec</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span><span class="nt">gateways</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span>- <span class="l">knative-ingress-gateway</span><span class="w">
+</span><span class="w">  </span>- <span class="l">mesh</span><span class="w">
+</span><span class="w">  </span><span class="nt">hosts</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span>- <span class="l">helloworld-go.default.example.com</span><span class="w">
+</span><span class="w">  </span>- <span class="l">helloworld-go.default.svc.cluster.local</span><span class="w">
+</span><span class="w">  </span><span class="nt">http</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span>- <span class="nt">appendHeaders</span><span class="p">:</span><span class="w">
+</span><span class="w">    </span><span class="nt">route</span><span class="p">:</span><span class="w">
+</span><span class="w">    </span>- <span class="nt">destination</span><span class="p">:</span><span class="w">
+</span><span class="w">        </span><span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="l">Activator-Service.knative-serving.svc.cluster.local</span><span class="w">
+</span><span class="w">        </span><span class="nt">port</span><span class="p">:</span><span class="w">
+</span><span class="w">          </span><span class="nt">number</span><span class="p">:</span><span class="w"> </span><span class="m">80</span><span class="w">
+</span><span class="w">      </span><span class="nt">weight</span><span class="p">:</span><span class="w"> </span><span class="m">100</span><span class="w">
+</span></code></pre></div><p>当服务副本数不为0之后，vs变为如下所示，将Ingress Gateway的流量直接转发到服务Pod上。</p>
+<div class="highlight"><pre class="chroma"><code class="language-yaml" data-lang="yaml"><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l">networking.istio.io/v1alpha3</span><span class="w">
+</span><span class="w"></span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l">VirtualService</span><span class="w">
+</span><span class="w"></span><span class="nt">metadata</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l">route-f8c50d56-3f47-11e9-9a9a-08002715c9e6</span><span class="w">
+</span><span class="w"></span><span class="nt">spec</span><span class="p">:</span><span class="w">
+</span><span class="w"> </span><span class="nt">hosts</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span>- <span class="l">helloworld-go.default.example.com</span><span class="w">
+</span><span class="w">  </span>- <span class="l">helloworld-go.default.svc.cluster.local</span><span class="w">
+</span><span class="w">  </span><span class="nt">http</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span>- <span class="nt">match</span><span class="p">:</span><span class="w">
+</span><span class="w">    </span><span class="nt">route</span><span class="p">:</span><span class="w">
+</span><span class="w">    </span>- <span class="nt">destination</span><span class="p">:</span><span class="w">
+</span><span class="w">        </span><span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="l">helloworld-go-2xxcn-Service.default.svc.cluster.local</span><span class="w">
+</span><span class="w">        </span><span class="nt">port</span><span class="p">:</span><span class="w">
+</span><span class="w">          </span><span class="nt">number</span><span class="p">:</span><span class="w"> </span><span class="m">80</span><span class="w">
+</span><span class="w">      </span><span class="nt">weight</span><span class="p">:</span><span class="w"> </span><span class="m">100</span><span class="w">
+</span></code></pre></div><p>我们可以很明显的看出，Knative就是通过修改vs的destination host来实现冷启动中的流量保持和转发。<br>
+相信目前你在网上能找到资料，也基本上停留在该阶段。不过，由于Knative的快速迭代，这里的一些实现细节分析已经过时。<br>
+下面以0.9版本为例，我们仔细探究一下现有的实现方式，和关于Knative流量的真正秘密。</p>
+<h2 id="复杂但是更优异的新版流量机制">复杂但是更优异的新版流量机制</h2>
+<p>鉴于官方文档并没有最新的具体实现机制介绍，我们创建一个简单的hello-go ksvc，并以此进行分析。ksvc如下所示：</p>
+<pre><code>apiVersion: serving.knative.dev/v1alpha1
+kind: Service
+metadata:
+  name: hello-go
+  namespace: faas
+spec:
+  template:
+    spec:
+      containers:
+      - image: harbor-yx-jd-dev.yx.netease.com/library/helloworld-go:v0.1
+        env:
+        - name: TARGET
+          value: &quot;Go Sample v1&quot;
+</code></pre><h3 id="virtualservice的变化">virtualservice的变化</h3>
+<p>笔者的环境可简单的认为是一个标准的Istio部署，Serverless网关为Istio Ingress Gateway，所以创建完ksvc后，为了验证服务是否可以正常运行，需要发送http请求至网关。Gateway资源已经在部署Knative的时候创建，这里我们只需要关心vs。在服务副本数为0的时候，Knative控制器创建的vs关键配置如下：</p>
+<div class="highlight"><pre class="chroma"><code class="language-yaml" data-lang="yaml"><span class="nt">spec</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span><span class="nt">gateways</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span>- <span class="l">knative-serving/cluster-local-gateway</span><span class="w">
+</span><span class="w">  </span>- <span class="l">knative-serving/knative-ingress-gateway</span><span class="w">
+</span><span class="w">  </span><span class="nt">hosts</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span>- <span class="l">hello-go.faas</span><span class="w">
+</span><span class="w">  </span>- <span class="l">hello-go.faas.example.com</span><span class="w">
+</span><span class="w">  </span>- <span class="l">hello-go.faas.svc</span><span class="w">
+</span><span class="w">  </span>- <span class="l">hello-go.faas.svc.cluster.local</span><span class="w">
+</span><span class="w">  </span>- <span class="l">f81497077928a654cf9422088e7522d5.probe.invalid</span><span class="w">
+</span><span class="w">  </span><span class="nt">http</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span>- <span class="nt">match</span><span class="p">:</span><span class="w">
+</span><span class="w">    </span>- <span class="nt">authority</span><span class="p">:</span><span class="w">
+</span><span class="w">        </span><span class="nt">regex</span><span class="p">:</span><span class="w"> </span><span class="l">^hello-go\.faas\.example\.com(?::\d{1,5})?$</span><span class="w">
+</span><span class="w">      </span><span class="nt">gateways</span><span class="p">:</span><span class="w">
+</span><span class="w">      </span>- <span class="l">knative-serving/knative-ingress-gateway</span><span class="w">
+</span><span class="w">    </span>- <span class="nt">authority</span><span class="p">:</span><span class="w">
+</span><span class="w">        </span><span class="nt">regex</span><span class="p">:</span><span class="w"> </span><span class="l">^hello-go\.faas(\.svc(\.cluster\.local)?)?(?::\d{1,5})?$</span><span class="w">
+</span><span class="w">      </span><span class="nt">gateways</span><span class="p">:</span><span class="w">
+</span><span class="w">      </span>- <span class="l">knative-serving/cluster-local-gateway</span><span class="w">
+</span><span class="w">    </span><span class="nt">retries</span><span class="p">:</span><span class="w">
+</span><span class="w">      </span><span class="nt">attempts</span><span class="p">:</span><span class="w"> </span><span class="m">3</span><span class="w">
+</span><span class="w">      </span><span class="nt">perTryTimeout</span><span class="p">:</span><span class="w"> </span><span class="l">10m0s</span><span class="w">
+</span><span class="w">    </span><span class="nt">route</span><span class="p">:</span><span class="w">
+</span><span class="w">    </span>- <span class="nt">destination</span><span class="p">:</span><span class="w">
+</span><span class="w">        </span><span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="l">hello-go-fpmln.faas.svc.cluster.local</span><span class="w">
+</span><span class="w">        </span><span class="nt">port</span><span class="p">:</span><span class="w">
+</span><span class="w">          </span><span class="nt">number</span><span class="p">:</span><span class="w"> </span><span class="m">80</span><span class="w">
+</span></code></pre></div><p>vs指定了已经创建好的gw，同时destination指向的是一个Service域名。这个Service就是Knative默认自动创建的hello-go服务的Service。<br>
+细心的我们又发现vs的ownerReferences指向了一个Knative的CRD ingress.networking.internal.knative.dev：</p>
+<div class="highlight"><pre class="chroma"><code class="language-yaml" data-lang="yaml"><span class="w">  </span><span class="nt">ownerReferences</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span>- <span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l">networking.internal.knative.dev/v1alpha1</span><span class="w">
+</span><span class="w">    </span><span class="nt">blockOwnerDeletion</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w">
+</span><span class="w">    </span><span class="nt">controller</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w">
+</span><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l">Ingress</span><span class="w">
+</span><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l">hello-go</span><span class="w">
+</span><span class="w">    </span><span class="nt">uid</span><span class="p">:</span><span class="w"> </span><span class="l">4a27a69e-5b9c-11ea-ae53-fa163ec7c05f</span><span class="w">
+</span></code></pre></div><p>根据名字可以看到这是一个Knative内部使用的CRD，该CRD的内容其实和vs比较类似，同时ingress.networking.internal.knative.dev的ownerReferences指向了我们熟悉的route，总结下来就是：</p>
+<pre><code>route -&gt; kingress(ingress.networking.internal.knative.dev) -&gt; vs
+</code></pre><p>在网关这一层涉及到的CRD资源就是如上这些。这里kingress的意义在于增加一层抽象，如果我们使用的是Gloo等其他网关，则会将kingress转换成相应的网关资源配置。最新的版本中，负责kingress到Istio vs的控制器部分代码已经独立出一个项目，可见如今的Knative对Istio已经不是强依赖。<br>
+现在，我们已经了解到Serverless网关是由Knative控制器最终生成的vs生效到Istio Ingress Gateway上，为了验证我们刚才部署的服务是否可以正常的运行，简单的用curl命令试验一下。<br>
+和所有的网关或者负载均衡器一样，对于7层http访问，我们需要在Header里加域名Host，用于流量转发到具体的服务。在上面的vs中已经可以看到对外域名和内部Service域名均已经配置。所以，只需要：</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">curl -v -H<span class="s1">&#39;Host:hello-go.faas.example.com&#39;</span>  &lt;IngressIP&gt;:&lt;Port&gt; 
+</code></pre></div><p>其中，IngressIP即网关实例对外暴露的IP。<br>
+对于冷启动来说，目前的Knative需要等十几秒，即会收到请求。根据之前老版本的经验，这个时候vs会被更新，destination指向hello-go的Service。<br>
+不过，现在我们实际发现，vs没有任何变化，仍然指向了服务的Service。对比老版本中服务副本数为0时，其实vs的destination指向的是Activator组件的。但现在，不管服务副本数如何变化，vs一直不变。<br>
+蹊跷只能从destination的Service域名入手。</p>
+<h3 id="revision-service探索">revision service探索</h3>
+<p>创建ksvc后，Knative会帮我们自动创建Service如下所示。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">$ kubectl -n faas get svc
+NAME                     TYPE           CLUSTER-IP     EXTERNAL-IP                                            PORT<span class="o">(</span>S<span class="o">)</span>      
+hello-go                 ExternalName   &lt;none&gt;         cluster-local-gateway.istio-system.svc.cluster.local   &lt;none&gt;           
+hello-go-fpmln           ClusterIP      10.178.4.126   &lt;none&gt;                                                 80/TCP             
+hello-go-fpmln-m9mmg     ClusterIP      10.178.5.65    &lt;none&gt;                                                 80/TCP,8022/TCP  
+hello-go-fpmln-metrics   ClusterIP      10.178.4.237   &lt;none&gt;                                                 9090/TCP,9091/TCP
+</code></pre></div><p>hello-go Service是一个ExternalName Service，作用是将hello-go的Service域名增加一个dns CNAME别名记录，指向网关的Service域名。<br>
+根据Service的annotation我们可以发现，Knative对hello-go-fpmln、hello-go-fpmln-m9mmg 、hello-go-fpmln-metrics这三个Service的定位分别为public Service、private Service和metric Service（最新版本已经将private和metrics Service合并）。<br>
+private Service和metric Service其实不难理解。问题的关键就在这里的public Service，仔细研究hello-go-fpmln Service，我们可以发现这是一个没有labelSelector的Service，它的Endpoint不是kubernetes自动创建的，需要额外生成。<br>
+在服务副本数为0时，查看一下Service对应的Endpoint，如下所示：</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">$ kubectl -n faas get ep
+NAME                     ENDPOINTS                               AGE
+hello-go-fpmln           172.31.16.81:8012                       
+hello-go-fpmln-m9mmg     172.31.16.121:8012,172.31.16.121:8022   
+hello-go-fpmln-metrics   172.31.16.121:9090,172.31.16.121:9091   
+</code></pre></div><p>其中，public Service的Endpoint IP是Knative Activator的Pod IP，实际发现Activator的副本数越多这里也会相应的增加。并且由上面的分析可以看到，vs的destination指向的就是public Service。<br>
+输入几次curl命令模拟一下http请求，虽然副本数从0开始增加到1了，但是这里的Endpoint却没有变化，仍然为Activator Pod IP。<br>
+接着使用hey来压测一下：</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">./hey_linux_amd64 -n <span class="m">1000000</span> -c <span class="m">300</span>  -m GET -host helloworld-go.faas.example.com http://&lt;IngressIP&gt;:80
+</code></pre></div><p>发现Endpoint变化了，通过对比服务的Pod IP，已经变成了新启动的服务Pod IP，不再是Activator Pod的IP。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">$ kubectl -n faas get ep
+NAME                     ENDPOINTS                         
+helloworld-go-mpk25      172.31.16.121:8012
+hello-go-fpmln-m9mmg     172.31.16.121:8012,172.31.16.121:8022   
+hello-go-fpmln-metrics   172.31.16.121:9090,172.31.16.121:9091   
+</code></pre></div><p>原来，现在新版本的冷启动流量转发机制已经不再是通过修改vs来改变网关的流量转发配置了，而是直接更新服务的public Service后端Endpoint，从而实现将流量从Activator转发到实际的服务Pod上。<br>
+通过将流量的转发功能内聚到Service/Endpoint层，一方面减小了网关的配置更新压力，一方面Knative可以在对接各种不同的网关时的实现时更加解耦，网关层不再需要关心冷启动时的流量转发机制。</p>
+<h3 id="流量路径">流量路径</h3>
+<p>再深入从上述的三个Service入手研究，它们的ownerReference是serverlessservice.networking.internal.knative.dev(sks)，而sks的ownerReference是podautoscaler.autoscaling.internal.knative.dev(kpa)。<br>
+在压测过程中同样发现，sks会在冷启动过后，会从Proxy模式变为Serve模式：</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">$ kubectl -n faas get sks
+NAME             MODE    SERVICENAME      PRIVATESERVICENAME     READY   REASON
+hello-go-fpmln   Proxy   hello-go-fpmln   hello-go-fpmln-m9mmg   True
+</code></pre></div><div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">$ kubectl -n faas get sks
+NAME             MODE    SERVICENAME      PRIVATESERVICENAME     READY   REASON
+hello-go-fpmln   Serve   hello-go-fpmln   hello-go-fpmln-m9mmg   True
+</code></pre></div><p>这也意味着，当流量从Activator导入的时候，sks为Proxy模式，服务真正启动起来后会变成Serve模式，网关流量直接流向服务Pod。<br>
+从名称上也可以看到，sks和kpa均为Knative内部CRD，实际上也是由于Knative设计上可以支持自定义的扩缩容方式和支持Kubernetes HPA有关，实现更高一层的抽象。<br>
+现在为止，我们可以梳理Knative的绝大部分CRD的关系如下图所示：
+<img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-crd.png"
+        data-srcset="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-crd.png, https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-crd.png 1.5x, https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-crd.png 2x"
+        data-sizes="auto"
+        alt="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-crd.png"
+        title="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-crd.png" /></p>
+<p>一个更复杂的实际实现架构图如下所示。
+<img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-service-arch.png"
+        data-srcset="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-service-arch.png, https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-service-arch.png 1.5x, https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-service-arch.png 2x"
+        data-sizes="auto"
+        alt="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-service-arch.png"
+        title="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/knative-service-arch.png" /></p>
+<p>简单来说，服务副本数为0时，流量路径为：</p>
+<pre><code>网关-&gt; public Service -&gt; Activator
+</code></pre><p>经过冷启动后，副本数为N时，流量路径为：</p>
+<pre><code>网关-&gt; public Service -&gt; Pod
+</code></pre><p>当然流量到Pod后，实际内部还有Envoy sidecar流量拦截，Queue-Proxy sidecar反向代理，才再到用户的User Container。这里的机制背后实现我们会有另外一篇文章再单独细聊。</p>
+<h2 id="总结">总结</h2>
+<p>Knative本身的实现可谓是云原生领域里的一个集大成者，融合Kubernetes、ServiceMesh、Serverless让Knative充满了魅力，但同时也导致了Knative的复杂性。
+网络流量的稳定保障是Serverless服务真正生产可用性的关键因素，Knative也还在高速的更新迭代中，相信Knative会在未来对网络方面的性能和稳定性投入更多的优化。</p>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info">
+        <div class="post-info-line">
+            <div class="post-info-mod">
+                <span>更新于 2021-03-05</span>
+            </div>
+            <div class="post-info-license"></div>
+        </div>
+        <div class="post-info-line">
+            <div class="post-info-md"></div>
+            <div class="post-info-share">
+                <span></span>
+            </div>
+        </div>
+    </div>
+
+    <div class="post-info-more">
+        <section class="post-tags"><i class="fas fa-tags fa-fw"></i>&nbsp;<a href="/tags/serverless/">serverless</a>,&nbsp;<a href="/tags/knative/">knative</a></section>
+        <section>
+            <span><a href="javascript:void(0);" onclick="window.history.back();">返回</a></span>&nbsp;|&nbsp;<span><a href="/">主页</a></span>
+        </section>
+    </div>
+
+    <div class="post-nav"><a href="/posts/knative%E4%B9%8B%E8%87%AA%E5%8A%A8%E6%89%A9%E7%BC%A9%E5%AE%B9/" class="prev" rel="prev" title="从HPA到KPA：Knative自动扩缩容深度分析"><i class="fas fa-angle-left fa-fw"></i>从HPA到KPA：Knative自动扩缩容深度分析</a></div>
+</div>
+</article></div>
+            </main><footer class="footer">
+        <div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.81.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/dillonzq/LoveIt" target="_blank" rel="noopener noreffer" title="LoveIt 0.2.10"><i class="far fa-kiss-wink-heart fa-fw"></i> LoveIt</a>
+                </div><div class="footer-line"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2021</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="https://github.com/ethfoo" target="_blank">ethfoo</a></span></div>
+        </div>
+    </footer></div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+                <i class="fas fa-arrow-up fa-fw"></i>
+            </a><a href="#" id="view-comments" class="fixed-button" title="查看评论">
+                <i class="fas fa-comment fa-fw"></i>
+            </a>
+        </div><script type="text/javascript" src="/lib/smooth-scroll/smooth-scroll.min.js"></script><script type="text/javascript" src="/lib/lazysizes/lazysizes.min.js"></script><script type="text/javascript" src="/lib/clipboard/clipboard.min.js"></script><script type="text/javascript">window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":10},"comment":{}};</script><script type="text/javascript" src="/js/theme.min.js"></script></body>
+</html>
