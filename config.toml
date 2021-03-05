@@ -3,7 +3,7 @@ baseURL = "http://example.org/"
 defaultContentLanguage = "zh-cn"
 # language code
 languageCode = "zh-cn"
-title = "Ethfoo"
+title = "Ethfoo's Blog"
 
 # Change the default theme to be use when building the site with Hugo
 theme = "LoveIt"
@@ -14,6 +14,31 @@ ignoreErrors = ["error-remote-getjson"]
 [params]
   # LoveIt theme version
   version = "0.2.X"
+  [params.home]
+    # 主页个人信息
+    [params.home.profile]
+      enable = true
+      # 主页显示头像的 URL
+      avatarURL = "/images/avatar.jpeg"
+      # 主页显示的网站标题 (支持 HTML 格式)
+      title = ""
+      # 主页显示的网站副标题
+      subtitle = "core dump"
+      # 是否为副标题显示打字机动画
+      typeit = true
+      # 是否显示社交账号
+      social = true
+      # 免责声明 (支持 HTML 格式)
+      disclaimer = ""
+    # 主页文章列表
+    [params.home.posts]
+      enable = true
+      # 主页每页显示文章数量
+      paginate = 10
+  # 主页的社交信息设置
+  [params.social]
+    GitHub = "ethfoo"
+    Email = "ethfoo@163.com"
 
 
 [menu]
