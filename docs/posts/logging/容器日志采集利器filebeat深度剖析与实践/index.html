@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="robots" content="noodp" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge, chrome=1">
+        <title>容器日志采集利器：Filebeat深度剖析与实践 - Ethfoo&#39;s Blog</title><meta name="Description" content=""><meta property="og:title" content="容器日志采集利器：Filebeat深度剖析与实践" />
+<meta property="og:description" content="在云原生时代和容器化浪潮中，容器的日志采集是一个看起来不起眼却又无法忽视的重要议题。对于容器日志采集我们常用的工具有Filebeat和Fluentd，两者对比各有优劣，相比基于ruby的Fluentd，考虑到可定制性，我们一般默认选择golang技术栈的Filebeat作为主力的日志采集agent。
+相比较传统的日志采集方式，容器化下单节点会运行更多的服务，负载也会有更短的生命周期，而这些更容易对日志采集agent造成压力，虽然Filebeat足够轻量级和高性能，但如果不了解Filebeat的机制，不合理的配置Filebeat，实际的生产环境使用中可能也会给我们带来意想不到的麻烦和难题。
+整体架构 日志采集的功能看起来不复杂，主要功能无非就是找到配置的日志文件，然后读取并处理，发送至相应的后端如elasticsearch,kafka等。
+Filebeat官网有张示意图，如下所示：
+针对每个日志文件，Filebeat都会启动一个harvester协程，即一个goroutine，在该goroutine中不停的读取日志文件，直到文件的EOF末尾。一个最简单的表示采集目录的input配置大概如下所示：
+filebeat.inputs:- type:log# Paths that should be crawled and fetched. Glob based paths.paths:- /var/log/*.log不同的harvester goroutine采集到的日志数据都会发送至一个全局的队列queue中，queue的实现有两种：基于内存和基于磁盘的队列，目前基于磁盘的队列还是处于alpha阶段，Filebeat默认启用的是基于内存的缓存队列。
+每当队列中的数据缓存到一定的大小或者超过了定时的时间（默认1s)，会被注册的client从队列中消费，发送至配置的后端。目前可以设置的client有kafka、elasticsearch、redis等。
+虽然这一切看着挺简单，但在实际使用中，我们还是需要考虑更多的问题，例如：
+ 日志文件是如何被filbebeat发现又是如何被采集的？ Filebeat是如何确保日志采集发送到远程的存储中，不丢失一条数据的？ 如果Filebeat挂掉，下次采集如何确保从上次的状态开始而不会重新采集所有日志？ Filebeat的内存或者cpu占用过多，该如何分析解决？ Filebeat如何支持docker和kubernetes，如何配置容器化下的日志采集？ 想让Filebeat采集的日志发送至的后端存储，如果原生不支持，怎样定制化开发？  这些均需要对Filebeat有更深入的理解，下面让我们跟随Filebeat的源码一起探究其中的实现机制。
+一条日志是如何被采集的 Filebeat源码归属于beats项目，而beats项目的设计初衷是为了采集各类的数据，所以beats抽象出了一个libbeat库，基于libbeat我们可以快速的开发实现一个采集的工具，除了Filebeat，还有像metricbeat、packetbeat等官方的项目也是在beats工程中。
+如果我们大致看一下代码就会发现，libbeat已经实现了内存缓存队列memqueue、几种output日志发送客户端，数据的过滤处理processor等通用功能，而Filebeat只需要实现日志文件的读取等和日志相关的逻辑即可。
+从代码的实现角度来看，Filebeat大概可以分以下几个模块：
+ input: 找到配置的日志文件，启动harvester harvester: 读取文件，发送至spooler spooler: 缓存日志数据，直到可以发送至publisher publisher: 发送日志至后端，同时通知registrar registrar: 记录日志文件被采集的状态  1. 找到日志文件 对于日志文件的采集和生命周期管理，Filebeat抽象出一个Crawler的结构体， 在Filebeat启动后，crawler会根据配置创建，然后遍历并运行每个input：
+for _, inputConfig := range c.inputConfigs { err := c.startInput(pipeline, inputConfig, r.GetStates()) } 在每个input运行的逻辑里，首先会根据配置获取匹配的日志文件，需要注意的是，这里的匹配方式并非正则，而是采用linux glob的规则，和正则还是有一些区别。
+matches, err := filepath.Glob(path) 获取到了所有匹配的日志文件之后，会经过一些复杂的过滤，例如如果配置了exclude_files则会忽略这类文件，同时还会查询文件的状态，如果文件的最近一次修改时间大于ignore_older的配置，也会不去采集该文件。" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="http://example.org/posts/logging/%E5%AE%B9%E5%99%A8%E6%97%A5%E5%BF%97%E9%87%87%E9%9B%86%E5%88%A9%E5%99%A8filebeat%E6%B7%B1%E5%BA%A6%E5%89%96%E6%9E%90%E4%B8%8E%E5%AE%9E%E8%B7%B5/" /><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2019-07-13T10:12:46&#43;08:00" />
+<meta property="article:modified_time" content="2019-07-13T10:12:46&#43;08:00" />
+
+<meta name="twitter:card" content="summary"/>
+<meta name="twitter:title" content="容器日志采集利器：Filebeat深度剖析与实践"/>
+<meta name="twitter:description" content="在云原生时代和容器化浪潮中，容器的日志采集是一个看起来不起眼却又无法忽视的重要议题。对于容器日志采集我们常用的工具有Filebeat和Fluentd，两者对比各有优劣，相比基于ruby的Fluentd，考虑到可定制性，我们一般默认选择golang技术栈的Filebeat作为主力的日志采集agent。
+相比较传统的日志采集方式，容器化下单节点会运行更多的服务，负载也会有更短的生命周期，而这些更容易对日志采集agent造成压力，虽然Filebeat足够轻量级和高性能，但如果不了解Filebeat的机制，不合理的配置Filebeat，实际的生产环境使用中可能也会给我们带来意想不到的麻烦和难题。
+整体架构 日志采集的功能看起来不复杂，主要功能无非就是找到配置的日志文件，然后读取并处理，发送至相应的后端如elasticsearch,kafka等。
+Filebeat官网有张示意图，如下所示：
+针对每个日志文件，Filebeat都会启动一个harvester协程，即一个goroutine，在该goroutine中不停的读取日志文件，直到文件的EOF末尾。一个最简单的表示采集目录的input配置大概如下所示：
+filebeat.inputs:- type:log# Paths that should be crawled and fetched. Glob based paths.paths:- /var/log/*.log不同的harvester goroutine采集到的日志数据都会发送至一个全局的队列queue中，queue的实现有两种：基于内存和基于磁盘的队列，目前基于磁盘的队列还是处于alpha阶段，Filebeat默认启用的是基于内存的缓存队列。
+每当队列中的数据缓存到一定的大小或者超过了定时的时间（默认1s)，会被注册的client从队列中消费，发送至配置的后端。目前可以设置的client有kafka、elasticsearch、redis等。
+虽然这一切看着挺简单，但在实际使用中，我们还是需要考虑更多的问题，例如：
+ 日志文件是如何被filbebeat发现又是如何被采集的？ Filebeat是如何确保日志采集发送到远程的存储中，不丢失一条数据的？ 如果Filebeat挂掉，下次采集如何确保从上次的状态开始而不会重新采集所有日志？ Filebeat的内存或者cpu占用过多，该如何分析解决？ Filebeat如何支持docker和kubernetes，如何配置容器化下的日志采集？ 想让Filebeat采集的日志发送至的后端存储，如果原生不支持，怎样定制化开发？  这些均需要对Filebeat有更深入的理解，下面让我们跟随Filebeat的源码一起探究其中的实现机制。
+一条日志是如何被采集的 Filebeat源码归属于beats项目，而beats项目的设计初衷是为了采集各类的数据，所以beats抽象出了一个libbeat库，基于libbeat我们可以快速的开发实现一个采集的工具，除了Filebeat，还有像metricbeat、packetbeat等官方的项目也是在beats工程中。
+如果我们大致看一下代码就会发现，libbeat已经实现了内存缓存队列memqueue、几种output日志发送客户端，数据的过滤处理processor等通用功能，而Filebeat只需要实现日志文件的读取等和日志相关的逻辑即可。
+从代码的实现角度来看，Filebeat大概可以分以下几个模块：
+ input: 找到配置的日志文件，启动harvester harvester: 读取文件，发送至spooler spooler: 缓存日志数据，直到可以发送至publisher publisher: 发送日志至后端，同时通知registrar registrar: 记录日志文件被采集的状态  1. 找到日志文件 对于日志文件的采集和生命周期管理，Filebeat抽象出一个Crawler的结构体， 在Filebeat启动后，crawler会根据配置创建，然后遍历并运行每个input：
+for _, inputConfig := range c.inputConfigs { err := c.startInput(pipeline, inputConfig, r.GetStates()) } 在每个input运行的逻辑里，首先会根据配置获取匹配的日志文件，需要注意的是，这里的匹配方式并非正则，而是采用linux glob的规则，和正则还是有一些区别。
+matches, err := filepath.Glob(path) 获取到了所有匹配的日志文件之后，会经过一些复杂的过滤，例如如果配置了exclude_files则会忽略这类文件，同时还会查询文件的状态，如果文件的最近一次修改时间大于ignore_older的配置，也会不去采集该文件。"/>
+<meta name="application-name" content="Ethfoo&#39;s Blog">
+<meta name="apple-mobile-web-app-title" content="Ethfoo&#39;s Blog"><link rel="shortcut icon" type="image/x-icon" href="/favicon.ico" />
+        <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+        <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png"><link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"><link rel="manifest" href="/site.webmanifest"><link rel="canonical" href="http://example.org/posts/logging/%E5%AE%B9%E5%99%A8%E6%97%A5%E5%BF%97%E9%87%87%E9%9B%86%E5%88%A9%E5%99%A8filebeat%E6%B7%B1%E5%BA%A6%E5%89%96%E6%9E%90%E4%B8%8E%E5%AE%9E%E8%B7%B5/" /><link rel="next" href="http://example.org/posts/cicd/kubernetes%E5%8E%9F%E7%94%9Fcicd%E5%B7%A5%E5%85%B7tekton%E6%8E%A2%E7%A7%98%E4%B8%8E%E4%B8%8A%E6%89%8B%E5%AE%9E%E8%B7%B5/" /><link rel="stylesheet" href="/lib/normalize/normalize.min.css"><link rel="stylesheet" href="/css/style.min.css"><link rel="stylesheet" href="/lib/fontawesome-free/all.min.css"><link rel="stylesheet" href="/lib/animate/animate.min.css"><script type="application/ld+json">
+    {
+        "@context": "http://schema.org",
+        "@type": "BlogPosting",
+        "headline": "容器日志采集利器：Filebeat深度剖析与实践",
+        "inLanguage": "en",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": "http:\/\/example.org\/posts\/logging\/%E5%AE%B9%E5%99%A8%E6%97%A5%E5%BF%97%E9%87%87%E9%9B%86%E5%88%A9%E5%99%A8filebeat%E6%B7%B1%E5%BA%A6%E5%89%96%E6%9E%90%E4%B8%8E%E5%AE%9E%E8%B7%B5\/"
+        },"genre": "posts","keywords": "filebeat, logging","wordcount":  654 ,
+        "url": "http:\/\/example.org\/posts\/logging\/%E5%AE%B9%E5%99%A8%E6%97%A5%E5%BF%97%E9%87%87%E9%9B%86%E5%88%A9%E5%99%A8filebeat%E6%B7%B1%E5%BA%A6%E5%89%96%E6%9E%90%E4%B8%8E%E5%AE%9E%E8%B7%B5\/","datePublished": "2019-07-13T10:12:46+08:00","dateModified": "2019-07-13T10:12:46+08:00","publisher": {
+            "@type": "Organization",
+            "name": "ethfoo"},"author": {
+                "@type": "Person",
+                "name": "ethfoo"
+            },"description": ""
+    }
+    </script></head>
+    <body header-desktop="" header-mobile=""><script type="text/javascript">(window.localStorage && localStorage.getItem('theme') ? localStorage.getItem('theme') === 'dark' : ('' === 'auto' ? window.matchMedia('(prefers-color-scheme: dark)').matches : '' === 'dark')) && document.body.setAttribute('theme', 'dark');</script>
+
+        <div id="mask"></div><div class="wrapper"><header class="desktop" id="header-desktop">
+    <div class="header-wrapper">
+        <div class="header-title">
+            <a href="/" title="Ethfoo&#39;s Blog">Ethfoo&#39;s Blog</a>
+        </div>
+        <div class="menu">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> Posts </a><a class="menu-item" href="/tags/"> Tags </a><a class="menu-item" href="/categories/"> Categories </a><span class="menu-item delimiter"></span><a href="javascript:void(0);" class="menu-item theme-switch" title="Switch Theme">
+                    <i class="fas fa-adjust fa-fw"></i>
+                </a>
+            </div>
+        </div>
+    </div>
+</header><header class="mobile" id="header-mobile">
+    <div class="header-container">
+        <div class="header-wrapper">
+            <div class="header-title">
+                <a href="/" title="Ethfoo&#39;s Blog">Ethfoo&#39;s Blog</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle-mobile">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+        <div class="menu" id="menu-mobile"><a class="menu-item" href="/posts/" title="">Posts</a><a class="menu-item" href="/tags/" title="">Tags</a><a class="menu-item" href="/categories/" title="">Categories</a><a href="javascript:void(0);" class="menu-item theme-switch" title="Switch Theme">
+                <i class="fas fa-adjust fa-fw"></i>
+            </a></div>
+    </div>
+</header>
+<div class="search-dropdown desktop">
+    <div id="search-dropdown-desktop"></div>
+</div>
+<div class="search-dropdown mobile">
+    <div id="search-dropdown-mobile"></div>
+</div>
+<main class="main">
+                <div class="container"><div class="toc" id="toc-auto">
+            <h2 class="toc-title">Contents</h2>
+            <div class="toc-content always-active" id="toc-content-auto"></div>
+        </div><article class="page single"><h1 class="single-title animated flipInX">容器日志采集利器：Filebeat深度剖析与实践</h1><div class="post-meta">
+            <div class="post-meta-line"><span class="post-author"><a href="https://github.com/ethfoo" title="Author" target="_blank" rel="noopener noreffer author" class="author"><i class="fas fa-user-circle fa-fw"></i>ethfoo</a></span>&nbsp;<span class="post-category">included in <a href="/categories/logging/"><i class="far fa-folder fa-fw"></i>logging</a></span></div>
+            <div class="post-meta-line"><i class="far fa-calendar-alt fa-fw"></i>&nbsp;<time datetime="2019-07-13">2019-07-13</time>&nbsp;</div>
+        </div><div class="details toc" id="toc-static"  kept="">
+                <div class="details-summary toc-title">
+                    <span>Contents</span>
+                    <span><i class="details-icon fas fa-angle-right"></i></span>
+                </div>
+                <div class="details-content toc-content" id="toc-content-static"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#整体架构">整体架构</a></li>
+    <li><a href="#一条日志是如何被采集的">一条日志是如何被采集的</a>
+      <ul>
+        <li><a href="#1-找到日志文件">1. 找到日志文件</a></li>
+        <li><a href="#2-读取日志文件">2. 读取日志文件</a></li>
+        <li><a href="#3-缓存队列">3. 缓存队列</a></li>
+        <li><a href="#4-消费队列">4. 消费队列</a></li>
+        <li><a href="#5-发送日志">5. 发送日志</a></li>
+      </ul>
+    </li>
+    <li><a href="#如何保证at-least-once">如何保证at least once</a></li>
+    <li><a href="#filebeat自动reload更新">Filebeat自动reload更新</a></li>
+    <li><a href="#filebeat对kubernetes的支持">Filebeat对kubernetes的支持</a></li>
+    <li><a href="#性能分析与调优">性能分析与调优</a></li>
+    <li><a href="#如何对filebeat进行扩展开发">如何对Filebeat进行扩展开发</a></li>
+  </ul>
+</nav></div>
+            </div><div class="content" id="content"><p>在云原生时代和容器化浪潮中，容器的日志采集是一个看起来不起眼却又无法忽视的重要议题。对于容器日志采集我们常用的工具有Filebeat和Fluentd，两者对比各有优劣，相比基于ruby的Fluentd，考虑到可定制性，我们一般默认选择golang技术栈的Filebeat作为主力的日志采集agent。<br>
+相比较传统的日志采集方式，容器化下单节点会运行更多的服务，负载也会有更短的生命周期，而这些更容易对日志采集agent造成压力，虽然Filebeat足够轻量级和高性能，但如果不了解Filebeat的机制，不合理的配置Filebeat，实际的生产环境使用中可能也会给我们带来意想不到的麻烦和难题。</p>
+<h2 id="整体架构">整体架构</h2>
+<p>日志采集的功能看起来不复杂，主要功能无非就是找到配置的日志文件，然后读取并处理，发送至相应的后端如elasticsearch,kafka等。<br>
+Filebeat官网有张示意图，如下所示：</p>
+<p><img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/filebeat.png"
+        data-srcset="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/filebeat.png, https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/filebeat.png 1.5x, https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/filebeat.png 2x"
+        data-sizes="auto"
+        alt="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/filebeat.png"
+        title="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/filebeat.png" /></p>
+<p>针对每个日志文件，Filebeat都会启动一个harvester协程，即一个goroutine，在该goroutine中不停的读取日志文件，直到文件的EOF末尾。一个最简单的表示采集目录的input配置大概如下所示：</p>
+<div class="highlight"><pre class="chroma"><code class="language-yaml" data-lang="yaml"><span class="nt">filebeat.inputs</span><span class="p">:</span><span class="w">
+</span><span class="w"></span>- <span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l">log</span><span class="w">
+</span><span class="w">  </span><span class="c"># Paths that should be crawled and fetched. Glob based paths.</span><span class="w">
+</span><span class="w">  </span><span class="nt">paths</span><span class="p">:</span><span class="w">
+</span><span class="w">    </span>- <span class="l">/var/log/*.log</span><span class="w">
+</span></code></pre></div><p>不同的harvester goroutine采集到的日志数据都会发送至一个全局的队列queue中，queue的实现有两种：基于内存和基于磁盘的队列，目前基于磁盘的队列还是处于alpha阶段，Filebeat默认启用的是基于内存的缓存队列。<br>
+每当队列中的数据缓存到一定的大小或者超过了定时的时间（默认1s)，会被注册的client从队列中消费，发送至配置的后端。目前可以设置的client有kafka、elasticsearch、redis等。</p>
+<p>虽然这一切看着挺简单，但在实际使用中，我们还是需要考虑更多的问题，例如：</p>
+<ul>
+<li>日志文件是如何被filbebeat发现又是如何被采集的？</li>
+<li>Filebeat是如何确保日志采集发送到远程的存储中，不丢失一条数据的？</li>
+<li>如果Filebeat挂掉，下次采集如何确保从上次的状态开始而不会重新采集所有日志？</li>
+<li>Filebeat的内存或者cpu占用过多，该如何分析解决？</li>
+<li>Filebeat如何支持docker和kubernetes，如何配置容器化下的日志采集？</li>
+<li>想让Filebeat采集的日志发送至的后端存储，如果原生不支持，怎样定制化开发？</li>
+</ul>
+<p>这些均需要对Filebeat有更深入的理解，下面让我们跟随Filebeat的源码一起探究其中的实现机制。</p>
+<h2 id="一条日志是如何被采集的">一条日志是如何被采集的</h2>
+<p>Filebeat源码归属于beats项目，而beats项目的设计初衷是为了采集各类的数据，所以beats抽象出了一个libbeat库，基于libbeat我们可以快速的开发实现一个采集的工具，除了Filebeat，还有像metricbeat、packetbeat等官方的项目也是在beats工程中。<br>
+如果我们大致看一下代码就会发现，libbeat已经实现了内存缓存队列memqueue、几种output日志发送客户端，数据的过滤处理processor等通用功能，而Filebeat只需要实现日志文件的读取等和日志相关的逻辑即可。</p>
+<p>从代码的实现角度来看，Filebeat大概可以分以下几个模块：</p>
+<ul>
+<li>input: 找到配置的日志文件，启动harvester</li>
+<li>harvester: 读取文件，发送至spooler</li>
+<li>spooler: 缓存日志数据，直到可以发送至publisher</li>
+<li>publisher: 发送日志至后端，同时通知registrar</li>
+<li>registrar: 记录日志文件被采集的状态</li>
+</ul>
+<h3 id="1-找到日志文件">1. 找到日志文件</h3>
+<p>对于日志文件的采集和生命周期管理，Filebeat抽象出一个Crawler的结构体，
+在Filebeat启动后，crawler会根据配置创建，然后遍历并运行每个input：</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go">	<span class="k">for</span> <span class="nx">_</span><span class="p">,</span> <span class="nx">inputConfig</span> <span class="o">:=</span> <span class="k">range</span> <span class="nx">c</span><span class="p">.</span><span class="nx">inputConfigs</span> <span class="p">{</span>
+		<span class="nx">err</span> <span class="o">:=</span> <span class="nx">c</span><span class="p">.</span><span class="nf">startInput</span><span class="p">(</span><span class="nx">pipeline</span><span class="p">,</span> <span class="nx">inputConfig</span><span class="p">,</span> <span class="nx">r</span><span class="p">.</span><span class="nf">GetStates</span><span class="p">())</span>
+	<span class="p">}</span>
+</code></pre></div><p>在每个input运行的逻辑里，首先会根据配置获取匹配的日志文件，需要注意的是，这里的匹配方式并非正则，而是采用linux glob的规则，和正则还是有一些区别。</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go">		<span class="nx">matches</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">filepath</span><span class="p">.</span><span class="nf">Glob</span><span class="p">(</span><span class="nx">path</span><span class="p">)</span>
+</code></pre></div><p>获取到了所有匹配的日志文件之后，会经过一些复杂的过滤，例如如果配置了<code>exclude_files</code>则会忽略这类文件，同时还会查询文件的状态，如果文件的最近一次修改时间大于<code>ignore_older</code>的配置，也会不去采集该文件。</p>
+<h3 id="2-读取日志文件">2. 读取日志文件</h3>
+<p>匹配到最终需要采集的日志文件之后，Filebeat会对每个文件启动harvester goroutine，在该goroutine中不停的读取日志，并发送给内存缓存队列memqueue。<br>
+在<code>(h *Harvester) Run()</code>方法中，我们可以看到这么一个无限循环，省略了一些逻辑的代码如下所示：</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go">	<span class="k">for</span> <span class="p">{</span>
+		<span class="nx">message</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">h</span><span class="p">.</span><span class="nx">reader</span><span class="p">.</span><span class="nf">Next</span><span class="p">()</span>
+		<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+			<span class="k">switch</span> <span class="nx">err</span> <span class="p">{</span>
+			<span class="k">case</span> <span class="nx">ErrFileTruncate</span><span class="p">:</span>
+				<span class="nx">logp</span><span class="p">.</span><span class="nf">Info</span><span class="p">(</span><span class="s">&#34;File was truncated. Begin reading file from offset 0: %s&#34;</span><span class="p">,</span> <span class="nx">h</span><span class="p">.</span><span class="nx">state</span><span class="p">.</span><span class="nx">Source</span><span class="p">)</span>
+				<span class="nx">h</span><span class="p">.</span><span class="nx">state</span><span class="p">.</span><span class="nx">Offset</span> <span class="p">=</span> <span class="mi">0</span>
+				<span class="nx">filesTruncated</span><span class="p">.</span><span class="nf">Add</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+			<span class="k">case</span> <span class="nx">ErrRemoved</span><span class="p">:</span>
+				<span class="nx">logp</span><span class="p">.</span><span class="nf">Info</span><span class="p">(</span><span class="s">&#34;File was removed: %s. Closing because close_removed is enabled.&#34;</span><span class="p">,</span> <span class="nx">h</span><span class="p">.</span><span class="nx">state</span><span class="p">.</span><span class="nx">Source</span><span class="p">)</span>
+			<span class="k">case</span> <span class="nx">ErrRenamed</span><span class="p">:</span>
+				<span class="nx">logp</span><span class="p">.</span><span class="nf">Info</span><span class="p">(</span><span class="s">&#34;File was renamed: %s. Closing because close_renamed is enabled.&#34;</span><span class="p">,</span> <span class="nx">h</span><span class="p">.</span><span class="nx">state</span><span class="p">.</span><span class="nx">Source</span><span class="p">)</span>
+			<span class="k">case</span> <span class="nx">ErrClosed</span><span class="p">:</span>
+				<span class="nx">logp</span><span class="p">.</span><span class="nf">Info</span><span class="p">(</span><span class="s">&#34;Reader was closed: %s. Closing.&#34;</span><span class="p">,</span> <span class="nx">h</span><span class="p">.</span><span class="nx">state</span><span class="p">.</span><span class="nx">Source</span><span class="p">)</span>
+			<span class="k">case</span> <span class="nx">io</span><span class="p">.</span><span class="nx">EOF</span><span class="p">:</span>
+				<span class="nx">logp</span><span class="p">.</span><span class="nf">Info</span><span class="p">(</span><span class="s">&#34;End of file reached: %s. Closing because close_eof is enabled.&#34;</span><span class="p">,</span> <span class="nx">h</span><span class="p">.</span><span class="nx">state</span><span class="p">.</span><span class="nx">Source</span><span class="p">)</span>
+			<span class="k">case</span> <span class="nx">ErrInactive</span><span class="p">:</span>
+				<span class="nx">logp</span><span class="p">.</span><span class="nf">Info</span><span class="p">(</span><span class="s">&#34;File is inactive: %s. Closing because close_inactive of %v reached.&#34;</span><span class="p">,</span> <span class="nx">h</span><span class="p">.</span><span class="nx">state</span><span class="p">.</span><span class="nx">Source</span><span class="p">,</span> <span class="nx">h</span><span class="p">.</span><span class="nx">config</span><span class="p">.</span><span class="nx">CloseInactive</span><span class="p">)</span>
+			<span class="k">default</span><span class="p">:</span>
+				<span class="nx">logp</span><span class="p">.</span><span class="nf">Err</span><span class="p">(</span><span class="s">&#34;Read line error: %v; File: %v&#34;</span><span class="p">,</span> <span class="nx">err</span><span class="p">,</span> <span class="nx">h</span><span class="p">.</span><span class="nx">state</span><span class="p">.</span><span class="nx">Source</span><span class="p">)</span>
+			<span class="p">}</span>
+			<span class="k">return</span> <span class="kc">nil</span>
+		<span class="p">}</span>
+		<span class="o">...</span>
+		<span class="k">if</span> <span class="p">!</span><span class="nx">h</span><span class="p">.</span><span class="nf">sendEvent</span><span class="p">(</span><span class="nx">data</span><span class="p">,</span> <span class="nx">forwarder</span><span class="p">)</span> <span class="p">{</span>
+			<span class="k">return</span> <span class="kc">nil</span>
+		<span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>可以看到，reader.Next()方法会不停的读取日志，如果没有返回异常，则发送日志数据到缓存队列中。<br>
+返回的异常有几种类型，除了读取到EOF外，还会有例如文件一段时间不活跃等情况发生会使harvester goroutine退出，不再采集该文件，并关闭文件句柄。<br>
+Filebeat为了防止占据过多的采集日志文件的文件句柄，默认的<code>close_inactive</code>参数为5min，如果日志文件5min内没有被修改，上面代码会进入ErrInactive的case，之后该harvester goroutine会被关闭。<br>
+这种场景下还需要注意的是，如果某个文件日志采集中被移除了，但是由于此时被Filebeat保持着文件句柄，文件占据的磁盘空间会被保留直到harvester goroutine结束。</p>
+<h3 id="3-缓存队列">3. 缓存队列</h3>
+<p>在memqueue被初始化时，Filebeat会根据配置<code>min_event</code>是否大于1创建BufferingEventLoop或者DirectEventLoop，一般默认都是BufferingEventLoop，即带缓冲的队列。</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go"><span class="kd">type</span> <span class="nx">bufferingEventLoop</span> <span class="kd">struct</span> <span class="p">{</span>
+	<span class="nx">broker</span> <span class="o">*</span><span class="nx">Broker</span>
+
+	<span class="nx">buf</span>        <span class="o">*</span><span class="nx">batchBuffer</span>
+	<span class="nx">flushList</span>  <span class="nx">flushList</span>
+	<span class="nx">eventCount</span> <span class="kt">int</span>
+
+	<span class="nx">minEvents</span>    <span class="kt">int</span>
+	<span class="nx">maxEvents</span>    <span class="kt">int</span>
+	<span class="nx">flushTimeout</span> <span class="nx">time</span><span class="p">.</span><span class="nx">Duration</span>
+
+	<span class="c1">// active broker API channels
+</span><span class="c1"></span>	<span class="nx">events</span>    <span class="kd">chan</span> <span class="nx">pushRequest</span>
+	<span class="nx">get</span>       <span class="kd">chan</span> <span class="nx">getRequest</span>
+	<span class="nx">pubCancel</span> <span class="kd">chan</span> <span class="nx">producerCancelRequest</span>
+
+	<span class="c1">// ack handling
+</span><span class="c1"></span>	<span class="nx">acks</span>        <span class="kd">chan</span> <span class="kt">int</span>      <span class="c1">// ackloop -&gt; eventloop : total number of events ACKed by outputs
+</span><span class="c1"></span>	<span class="nx">schedACKS</span>   <span class="kd">chan</span> <span class="nx">chanList</span> <span class="c1">// eventloop -&gt; ackloop : active list of batches to be acked
+</span><span class="c1"></span>	<span class="nx">pendingACKs</span> <span class="nx">chanList</span>      <span class="c1">// ordered list of active batches to be send to the ackloop
+</span><span class="c1"></span>	<span class="nx">ackSeq</span>      <span class="kt">uint</span>          <span class="c1">// ack batch sequence number to validate ordering
+</span><span class="c1"></span>
+	<span class="c1">// buffer flush timer state
+</span><span class="c1"></span>	<span class="nx">timer</span> <span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Timer</span>
+	<span class="nx">idleC</span> <span class="o">&lt;-</span><span class="kd">chan</span> <span class="nx">time</span><span class="p">.</span><span class="nx">Time</span>
+<span class="p">}</span>
+
+</code></pre></div><p>BufferingEventLoop是一个实现了Broker、带有各种channel的结构，主要用于将日志发送至consumer消费。
+BufferingEventLoop的run方法中，同样是一个无限循环，这里可以认为是一个日志事件的调度中心。</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go">	<span class="k">for</span> <span class="p">{</span>
+		<span class="k">select</span> <span class="p">{</span>
+		<span class="k">case</span> <span class="o">&lt;-</span><span class="nx">broker</span><span class="p">.</span><span class="nx">done</span><span class="p">:</span>
+			<span class="k">return</span>
+		<span class="k">case</span> <span class="nx">req</span> <span class="o">:=</span> <span class="o">&lt;-</span><span class="nx">l</span><span class="p">.</span><span class="nx">events</span><span class="p">:</span> <span class="c1">// producer pushing new event
+</span><span class="c1"></span>			<span class="nx">l</span><span class="p">.</span><span class="nf">handleInsert</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">req</span><span class="p">)</span>
+		<span class="k">case</span> <span class="nx">req</span> <span class="o">:=</span> <span class="o">&lt;-</span><span class="nx">l</span><span class="p">.</span><span class="nx">get</span><span class="p">:</span> <span class="c1">// consumer asking for next batch
+</span><span class="c1"></span>			<span class="nx">l</span><span class="p">.</span><span class="nf">handleConsumer</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">req</span><span class="p">)</span>
+		<span class="k">case</span> <span class="nx">count</span> <span class="o">:=</span> <span class="o">&lt;-</span><span class="nx">l</span><span class="p">.</span><span class="nx">acks</span><span class="p">:</span>
+			<span class="nx">l</span><span class="p">.</span><span class="nf">handleACK</span><span class="p">(</span><span class="nx">count</span><span class="p">)</span>
+		<span class="k">case</span> <span class="o">&lt;-</span><span class="nx">l</span><span class="p">.</span><span class="nx">idleC</span><span class="p">:</span>
+			<span class="nx">l</span><span class="p">.</span><span class="nx">idleC</span> <span class="p">=</span> <span class="kc">nil</span>
+			<span class="nx">l</span><span class="p">.</span><span class="nx">timer</span><span class="p">.</span><span class="nf">Stop</span><span class="p">()</span>
+			<span class="k">if</span> <span class="nx">l</span><span class="p">.</span><span class="nx">buf</span><span class="p">.</span><span class="nf">length</span><span class="p">()</span> <span class="p">&gt;</span> <span class="mi">0</span> <span class="p">{</span>
+				<span class="nx">l</span><span class="p">.</span><span class="nf">flushBuffer</span><span class="p">()</span>
+			<span class="p">}</span>
+		<span class="p">}</span>
+	<span class="p">}</span>
+</code></pre></div><p>上文中harvester goroutine每次读取到日志数据之后，最终会被发送至bufferingEventLoop中的<code>events chan pushRequest</code> channel，然后触发上面<code>req := &lt;-l.events</code>的case，handleInsert方法会把数据添加至bufferingEventLoop的buf中，buf即memqueue实际缓存日志数据的队列，如果buf长度超过配置的最大值或者bufferingEventLoop中的timer定时器触发了<code>case &lt;-l.idleC</code>，均会调用flushBuffer()方法。<br>
+flushBuffer()又会触发<code>req := &lt;-l.get</code>的case，然后运行handleConsumer方法，该方法中最重要的是这一句代码：</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go">	<span class="nx">req</span><span class="p">.</span><span class="nx">resp</span> <span class="o">&lt;-</span> <span class="nx">getResponse</span><span class="p">{</span><span class="nx">ackChan</span><span class="p">,</span> <span class="nx">events</span><span class="p">}</span>
+</code></pre></div><p>这里获取到了consumer消费者的response channel，然后发送数据给这个channel。真正到这，才会触发consumer对memqueue的消费。所以，其实memqueue并非一直不停的在被consumer消费，而是在memqueue通知consumer的时候才被消费，我们可以理解为一种脉冲式的发送。</p>
+<h3 id="4-消费队列">4. 消费队列</h3>
+<p>实际上，早在Filebeat初始化的时候，就已经创建了一个eventConsumer并在loop无限循环方法里试图从Broker中获取日志数据。</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go">	<span class="k">for</span> <span class="p">{</span>
+		<span class="k">if</span> <span class="p">!</span><span class="nx">paused</span> <span class="o">&amp;&amp;</span> <span class="nx">c</span><span class="p">.</span><span class="nx">out</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="o">&amp;&amp;</span> <span class="nx">consumer</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="o">&amp;&amp;</span> <span class="nx">batch</span> <span class="o">==</span> <span class="kc">nil</span> <span class="p">{</span>
+			<span class="nx">out</span> <span class="p">=</span> <span class="nx">c</span><span class="p">.</span><span class="nx">out</span><span class="p">.</span><span class="nx">workQueue</span>
+			<span class="nx">queueBatch</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">consumer</span><span class="p">.</span><span class="nf">Get</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">out</span><span class="p">.</span><span class="nx">batchSize</span><span class="p">)</span>
+			<span class="o">...</span>
+			<span class="nx">batch</span> <span class="p">=</span> <span class="nf">newBatch</span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">ctx</span><span class="p">,</span> <span class="nx">queueBatch</span><span class="p">,</span> <span class="nx">c</span><span class="p">.</span><span class="nx">out</span><span class="p">.</span><span class="nx">timeToLive</span><span class="p">)</span>
+		<span class="p">}</span>
+		<span class="o">...</span>
+		<span class="k">select</span> <span class="p">{</span>
+		<span class="k">case</span> <span class="o">&lt;-</span><span class="nx">c</span><span class="p">.</span><span class="nx">done</span><span class="p">:</span>
+			<span class="k">return</span>
+		<span class="k">case</span> <span class="nx">sig</span> <span class="o">:=</span> <span class="o">&lt;-</span><span class="nx">c</span><span class="p">.</span><span class="nx">sig</span><span class="p">:</span>
+			<span class="nf">handleSignal</span><span class="p">(</span><span class="nx">sig</span><span class="p">)</span>
+		<span class="k">case</span> <span class="nx">out</span> <span class="o">&lt;-</span> <span class="nx">batch</span><span class="p">:</span>
+			<span class="nx">batch</span> <span class="p">=</span> <span class="kc">nil</span>
+		<span class="p">}</span>
+	<span class="p">}</span>
+
+</code></pre></div><p>上面consumer.Get就是消费者consumer从Broker中获取日志数据，然后发送至out的channel中被output client发送，我们看一下Get方法里的核心代码：</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go">	<span class="k">select</span> <span class="p">{</span>
+	<span class="k">case</span> <span class="nx">c</span><span class="p">.</span><span class="nx">broker</span><span class="p">.</span><span class="nx">requests</span> <span class="o">&lt;-</span> <span class="nx">getRequest</span><span class="p">{</span><span class="nx">sz</span><span class="p">:</span> <span class="nx">sz</span><span class="p">,</span> <span class="nx">resp</span><span class="p">:</span> <span class="nx">c</span><span class="p">.</span><span class="nx">resp</span><span class="p">}:</span>
+	<span class="k">case</span> <span class="o">&lt;-</span><span class="nx">c</span><span class="p">.</span><span class="nx">done</span><span class="p">:</span>
+		<span class="k">return</span> <span class="kc">nil</span><span class="p">,</span> <span class="nx">io</span><span class="p">.</span><span class="nx">EOF</span>
+	<span class="p">}</span>
+
+	<span class="c1">// if request has been send, we do have to wait for a response
+</span><span class="c1"></span>	<span class="nx">resp</span> <span class="o">:=</span> <span class="o">&lt;-</span><span class="nx">c</span><span class="p">.</span><span class="nx">resp</span>
+	<span class="k">return</span> <span class="o">&amp;</span><span class="nx">batch</span><span class="p">{</span>
+		<span class="nx">consumer</span><span class="p">:</span> <span class="nx">c</span><span class="p">,</span>
+		<span class="nx">events</span><span class="p">:</span>   <span class="nx">resp</span><span class="p">.</span><span class="nx">buf</span><span class="p">,</span>
+		<span class="nx">ack</span><span class="p">:</span>      <span class="nx">resp</span><span class="p">.</span><span class="nx">ack</span><span class="p">,</span>
+		<span class="nx">state</span><span class="p">:</span>    <span class="nx">batchActive</span><span class="p">,</span>
+	<span class="p">},</span> <span class="kc">nil</span>
+
+</code></pre></div><p>getRequest的结构如下：</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go"><span class="kd">type</span> <span class="nx">getRequest</span> <span class="kd">struct</span> <span class="p">{</span>
+	<span class="nx">sz</span>   <span class="kt">int</span>              <span class="c1">// request sz events from the broker
+</span><span class="c1"></span>	<span class="nx">resp</span> <span class="kd">chan</span> <span class="nx">getResponse</span> <span class="c1">// channel to send response to
+</span><span class="c1"></span><span class="p">}</span>
+</code></pre></div><p>getResponse的结构：</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go"><span class="kd">type</span> <span class="nx">getResponse</span> <span class="kd">struct</span> <span class="p">{</span>
+	<span class="nx">ack</span> <span class="o">*</span><span class="nx">ackChan</span>
+	<span class="nx">buf</span> <span class="p">[]</span><span class="nx">publisher</span><span class="p">.</span><span class="nx">Event</span>
+<span class="p">}</span>
+</code></pre></div><p>getResponse里包含了日志的数据，而getRequest包含了一个发送至消费者的channel。<br>
+在上文bufferingEventLoop缓冲队列的handleConsumer方法里接收到的参数为getRequest，里面包含了consumer请求的getResponse channel。<br>
+如果handleConsumer不发送数据，consumer.Get方法会一直阻塞在select中，直到flushBuffer，consumer的getResponse channel才会接收到日志数据。</p>
+<h3 id="5-发送日志">5. 发送日志</h3>
+<p>在创建beats时，会创建一个clientWorker，clientWorker的run方法中，会不停的从consumer发送的channel里读取日志数据，然后调用client.Publish批量发送日志。</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go"><span class="kd">func</span> <span class="p">(</span><span class="nx">w</span> <span class="o">*</span><span class="nx">clientWorker</span><span class="p">)</span> <span class="nf">run</span><span class="p">()</span> <span class="p">{</span>
+	<span class="k">for</span> <span class="p">!</span><span class="nx">w</span><span class="p">.</span><span class="nx">closed</span><span class="p">.</span><span class="nf">Load</span><span class="p">()</span> <span class="p">{</span>
+		<span class="k">for</span> <span class="nx">batch</span> <span class="o">:=</span> <span class="k">range</span> <span class="nx">w</span><span class="p">.</span><span class="nx">qu</span> <span class="p">{</span>
+			<span class="k">if</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">w</span><span class="p">.</span><span class="nx">client</span><span class="p">.</span><span class="nf">Publish</span><span class="p">(</span><span class="nx">batch</span><span class="p">);</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+				<span class="k">return</span>
+			<span class="p">}</span>
+		<span class="p">}</span>
+	<span class="p">}</span>
+<span class="p">}</span>
+
+</code></pre></div><p>libbeats库中包含了kafka、elasticsearch、logstash等几种client，它们均实现了client接口：</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go"><span class="kd">type</span> <span class="nx">Client</span> <span class="kd">interface</span> <span class="p">{</span>
+	<span class="nf">Close</span><span class="p">()</span> <span class="kt">error</span>
+	<span class="nf">Publish</span><span class="p">(</span><span class="nx">publisher</span><span class="p">.</span><span class="nx">Batch</span><span class="p">)</span> <span class="kt">error</span>
+	<span class="nf">String</span><span class="p">()</span> <span class="kt">string</span>
+<span class="p">}</span>
+</code></pre></div><p>当然最重要的是实现Publish接口，然后将日志发送出去。</p>
+<p>实际上，Filebeat中日志数据在各种channel里流转的设计还是比较复杂和繁琐的，笔者也是研究了好久、画了很长的架构图才理清楚其中的逻辑。
+这里抽出了一个简化后的图以供参考：<br>
+<img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/arch.png"
+        data-srcset="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/arch.png, https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/arch.png 1.5x, https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/arch.png 2x"
+        data-sizes="auto"
+        alt="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/arch.png"
+        title="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/arch.png" /></p>
+<h2 id="如何保证at-least-once">如何保证at least once</h2>
+<p>Filebeat维护了一个registry文件在本地的磁盘，该registry文件维护了所有已经采集的日志文件的状态。
+实际上，每当日志数据发送至后端成功后，会返回ack事件。Filebeat启动了一个独立的registry协程负责监听该事件，接收到ack事件后会将日志文件的State状态更新至registry文件中，State中的Offset表示读取到的文件偏移量，所以Filebeat会保证Offset记录之前的日志数据肯定被后端的日志存储接收到。<br>
+State结构如下所示：</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go"><span class="kd">type</span> <span class="nx">State</span> <span class="kd">struct</span> <span class="p">{</span>
+	<span class="nx">Id</span>          <span class="kt">string</span>            <span class="s">`json:&#34;-&#34;`</span> <span class="c1">// local unique id to make comparison more efficient
+</span><span class="c1"></span>	<span class="nx">Finished</span>    <span class="kt">bool</span>              <span class="s">`json:&#34;-&#34;`</span> <span class="c1">// harvester state
+</span><span class="c1"></span>	<span class="nx">Fileinfo</span>    <span class="nx">os</span><span class="p">.</span><span class="nx">FileInfo</span>       <span class="s">`json:&#34;-&#34;`</span> <span class="c1">// the file info
+</span><span class="c1"></span>	<span class="nx">Source</span>      <span class="kt">string</span>            <span class="s">`json:&#34;source&#34;`</span>
+	<span class="nx">Offset</span>      <span class="kt">int64</span>             <span class="s">`json:&#34;offset&#34;`</span>
+	<span class="nx">Timestamp</span>   <span class="nx">time</span><span class="p">.</span><span class="nx">Time</span>         <span class="s">`json:&#34;timestamp&#34;`</span>
+	<span class="nx">TTL</span>         <span class="nx">time</span><span class="p">.</span><span class="nx">Duration</span>     <span class="s">`json:&#34;ttl&#34;`</span>
+	<span class="nx">Type</span>        <span class="kt">string</span>            <span class="s">`json:&#34;type&#34;`</span>
+	<span class="nx">Meta</span>        <span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span> <span class="s">`json:&#34;meta&#34;`</span>
+	<span class="nx">FileStateOS</span> <span class="nx">file</span><span class="p">.</span><span class="nx">StateOS</span>
+<span class="p">}</span>
+</code></pre></div><p>记录在registry文件中的数据大致如下所示：</p>
+<div class="highlight"><pre class="chroma"><code class="language-json" data-lang="json"><span class="p">[{</span><span class="nt">&#34;source&#34;</span><span class="p">:</span><span class="s2">&#34;/tmp/aa.log&#34;</span><span class="p">,</span><span class="nt">&#34;offset&#34;</span><span class="p">:</span><span class="mi">48</span><span class="p">,</span><span class="nt">&#34;timestamp&#34;</span><span class="p">:</span><span class="s2">&#34;2019-07-03T13:54:01.298995+08:00&#34;</span><span class="p">,</span><span class="nt">&#34;ttl&#34;</span><span class="p">:</span><span class="mi">-1</span><span class="p">,</span><span class="nt">&#34;type&#34;</span><span class="p">:</span><span class="s2">&#34;log&#34;</span><span class="p">,</span><span class="nt">&#34;meta&#34;</span><span class="p">:</span><span class="kc">null</span><span class="p">,</span><span class="nt">&#34;FileStateOS&#34;</span><span class="p">:{</span><span class="nt">&#34;inode&#34;</span><span class="p">:</span><span class="mi">7048952</span><span class="p">,</span><span class="nt">&#34;device&#34;</span><span class="p">:</span><span class="mi">16777220</span><span class="p">}}]</span>
+</code></pre></div><p>由于文件可能会被改名或移动，Filebeat会根据inode和设备号来标志每个日志文件。<br>
+如果Filebeat异常重启，每次采集harvester启动的时候都会读取registry文件，从上次记录的状态继续采集，确保不会从头开始重复发送所有的日志文件。<br>
+当然，如果日志发送过程中，还没来得及返回ack，Filebeat就挂掉，registry文件肯定不会更新至最新的状态，那么下次采集的时候，这部分的日志就会重复发送，所以这意味着Filebeat只能保证at least once，无法保证不重复发送。<br>
+还有一个比较异常的情况是，linux下如果老文件被移除，新文件马上创建，很有可能它们有相同的inode，而由于Filebeat根据inode来标志文件记录采集的偏移，会导致registry里记录的其实是被移除的文件State状态，这样新的文件采集却从老的文件Offset开始，从而会遗漏日志数据。<br>
+为了尽量避免inode被复用的情况，同时防止registry文件随着时间增长越来越大，建议使用clean_inactive和clean_remove配置将长时间未更新或者被删除的文件State从registry中移除。</p>
+<p>同时我们可以发现在harvester读取日志中，会更新registry的状态处理一些异常场景。例如，如果一个日志文件被清空，Filebeat会在下一次Reader.Next方法中返回ErrFileTruncate异常，将inode标志文件的Offset置为0，结束这次harvester，重新启动新的harvester，虽然文件不变，但是registry中的Offset为0，采集会从头开始。</p>
+<p>特别注意的是，如果使用容器部署Filebeat，需要将registry文件挂载到宿主机上，否则容器重启后registry文件丢失，会使Filebeat从头开始重复采集日志文件。</p>
+<h2 id="filebeat自动reload更新">Filebeat自动reload更新</h2>
+<p>目前Filebeat支持reload input配置，module配置，但reload的机制只有定时更新。<br>
+在配置中打开reload.enable之后，还可以配置reload.period表示自动reload配置的时间间隔。<br>
+Filebeat在启动时，会创建一个专门用于reload的协程。对于每个正在运行的harvester，Filebeat会将其加入一个全局的Runner列表，每次到了定时的间隔后，会触发一次配置文件的diff判断，如果是需要停止的加入stopRunner列表，然后逐个关闭，新的则加入startRunner列表，启动新的Runner。</p>
+<h2 id="filebeat对kubernetes的支持">Filebeat对kubernetes的支持</h2>
+<p>Filebeat官方文档提供了在kubernetes下基于daemonset的部署方式，最主要的一个配置如下所示：</p>
+<div class="highlight"><pre class="chroma"><code class="language-yaml" data-lang="yaml"><span class="w">    </span>- <span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l">docker</span><span class="w">
+</span><span class="w">      </span><span class="nt">containers.ids</span><span class="p">:</span><span class="w">
+</span><span class="w">      </span>- <span class="s2">&#34;*&#34;</span><span class="w">
+</span><span class="w">      </span><span class="nt">processors</span><span class="p">:</span><span class="w">
+</span><span class="w">        </span>- <span class="nt">add_kubernetes_metadata</span><span class="p">:</span><span class="w">
+</span><span class="w">            </span><span class="nt">in_cluster</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w">
+</span></code></pre></div><p>即设置输入input为docker类型。由于所有的容器的标准输出日志默认都在节点的<code>/var/lib/docker/containers/&lt;containerId&gt;/*-json.log</code>路径，所以本质上采集的是这类日志文件。<br>
+和传统的部署方式有所区别的是，如果服务部署在kubernetes上，我们查看和检索日志的维度不能仅仅局限于节点和服务，还需要有podName，containerName等，所以每条日志我们都需要打标增加kubernetes的元信息才发送至后端。<br>
+Filebeat会在配置中增加了add_kubernetes_metadata的processor的情况下，启动监听kubernetes的watch服务，监听所有kubernetes pod的变更，然后将归属本节点的pod最新的事件同步至本地的缓存中。<br>
+节点上一旦发生容器的销毁创建，/var/lib/docker/containers/下会有目录的变动，Filebeat根据路径提取出containerId，再根据containerId从本地的缓存中找到pod信息，从而可以获取到podName、label等数据，并加到日志的元信息fields中。<br>
+Filebeat还有一个beta版的功能autodiscover，autodiscover的目的是把分散到不同节点上的Filebeat配置文件集中管理。目前也支持kubernetes作为provider，本质上还是监听kubernetes事件然后采集docker的标准输出文件。<br>
+大致架构如下所示：<br>
+<img
+        class="lazyload"
+        src="/svg/loading.min.svg"
+        data-src="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/logagent.png"
+        data-srcset="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/logagent.png, https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/logagent.png 1.5x, https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/logagent.png 2x"
+        data-sizes="auto"
+        alt="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/logagent.png"
+        title="https://ethfooblog.oss-cn-shanghai.aliyuncs.com/img/logagent.png" />
+但是在实际生产环境使用中，仅采集容器的标准输出日志还是远远不够，我们往往还需要采集容器挂载出来的自定义日志目录，还需要控制每个服务的日志采集方式以及更多的定制化功能。</p>
+<p>在轻舟容器云上，我们自研了一个监听kubernetes事件自动生成Filebeat配置的agent，通过CRD的方式，支持自定义容器内部日志目录、支持自定义fields、支持多行读取等功能。同时可在kubernetes上统一管理各种日志配置，而且无需用户感知pod的创建销毁和迁移，自动完成各种场景下的日志配置生成和更新。</p>
+<h2 id="性能分析与调优">性能分析与调优</h2>
+<p>虽然beats系列主打轻量级，虽然用golang写的Filebeat的内存占用确实比较基于jvm的logstash等好太多，但是事实告诉我们其实没那么简单。<br>
+正常启动Filebeat，一般确实只会占用3、40MB内存，但是在轻舟容器云上偶发性的我们也会发现某些节点上的Filebeat容器内存占用超过配置的pod limit限制（一般设置为200MB），并且不停的触发的OOM。<br>
+究其原因，一般容器化环境中，特别是裸机上运行的容器个数可能会比较多，导致创建大量的harvester去采集日志。如果没有很好的配置Filebeat，会有较大概率导致内存急剧上升。<br>
+当然，Filebeat内存占据较大的部分还是memqueue，所有采集到的日志都会先发送至memqueue聚集，再通过output发送出去。每条日志的数据在Filebeat中都被组装为event结构，Filebeat默认配置的memqueue缓存的event个数为4096，可通过<code>queue.mem.events</code>设置。默认最大的一条日志的event大小限制为10MB，可通过<code>max_bytes</code>设置。<code>4096 * 10MB = 40GB</code>，可以想象，极端场景下，Filebeat至少占据40GB的内存。特别是配置了multiline多行模式的情况下，如果multiline配置有误，单个event误采集为上千条日志的数据，很可能导致memqueue占据了大量内存，致使内存爆炸。<br>
+所以，合理的配置日志文件的匹配规则，限制单行日志大小，根据实际情况配置memqueue缓存的个数，才能在实际使用中规避Filebeat的内存占用过大的问题。</p>
+<h2 id="如何对filebeat进行扩展开发">如何对Filebeat进行扩展开发</h2>
+<p>一般情况下Filebeat可满足大部分的日志采集需求，但是仍然避免不了一些特殊的场景需要我们对Filebeat进行定制化开发，当然Filebeat本身的设计也提供了良好的扩展性。<br>
+beats目前只提供了像elasticsearch、kafka、logstash等几类output客户端，如果我们想要Filebeat直接发送至其他后端，需要定制化开发自己的output。同样，如果需要对日志做过滤处理或者增加元信息，也可以自制processor插件。<br>
+无论是增加output还是写个processor，Filebeat提供的大体思路基本相同。一般来讲有3种方式：</p>
+<ol>
+<li>直接fork Filebeat，在现有的源码上开发。output或者processor都提供了类似Run、Stop等的接口，只需要实现该类接口，然后在init方法中注册相应的插件初始化方法即可。当然，由于golang中init方法是在import包时才被调用，所以需要在初始化Filebeat的代码中手动import。</li>
+<li>复制一份Filebeat的main.go，import我们自研的插件库，然后重新编译。本质上和方式1区别不大。</li>
+<li>Filebeat还提供了基于golang plugin的插件机制，需要把自研的插件编译成.so共享链接库，然后在Filebeat启动参数中通过-plugin指定库所在路径。不过实际上一方面golang plugin还不够成熟稳定，一方面自研的插件依然需要依赖相同版本的libbeat库，而且还需要相同的golang版本编译，坑可能更多，不太推荐。</li>
+</ol>
+</div><div class="post-footer" id="post-footer">
+    <div class="post-info">
+        <div class="post-info-line">
+            <div class="post-info-mod">
+                <span>Updated on 2019-07-13</span>
+            </div>
+            <div class="post-info-license"></div>
+        </div>
+        <div class="post-info-line">
+            <div class="post-info-md"></div>
+            <div class="post-info-share">
+                <span></span>
+            </div>
+        </div>
+    </div>
+
+    <div class="post-info-more">
+        <section class="post-tags"><i class="fas fa-tags fa-fw"></i>&nbsp;<a href="/tags/filebeat/">filebeat</a>,&nbsp;<a href="/tags/logging/">logging</a></section>
+        <section>
+            <span><a href="javascript:void(0);" onclick="window.history.back();">Back</a></span>&nbsp;|&nbsp;<span><a href="/">Home</a></span>
+        </section>
+    </div>
+
+    <div class="post-nav">
+            <a href="/posts/cicd/kubernetes%E5%8E%9F%E7%94%9Fcicd%E5%B7%A5%E5%85%B7tekton%E6%8E%A2%E7%A7%98%E4%B8%8E%E4%B8%8A%E6%89%8B%E5%AE%9E%E8%B7%B5/" class="next" rel="next" title="Kubernetes原生CICD工具：Tekton探秘与上手实践">Kubernetes原生CICD工具：Tekton探秘与上手实践<i class="fas fa-angle-right fa-fw"></i></a></div>
+</div>
+</article></div>
+            </main><footer class="footer">
+        <div class="footer-container"><div class="footer-line">Powered by <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.81.0">Hugo</a> | Theme - <a href="https://github.com/dillonzq/LoveIt" target="_blank" rel="noopener noreffer" title="LoveIt 0.2.10"><i class="far fa-kiss-wink-heart fa-fw"></i> LoveIt</a>
+                </div><div class="footer-line"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2021</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="https://github.com/ethfoo" target="_blank">ethfoo</a></span></div>
+        </div>
+    </footer></div>
+
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="Back to Top">
+                <i class="fas fa-arrow-up fa-fw"></i>
+            </a><a href="#" id="view-comments" class="fixed-button" title="View Comments">
+                <i class="fas fa-comment fa-fw"></i>
+            </a>
+        </div><script type="text/javascript" src="/lib/smooth-scroll/smooth-scroll.min.js"></script><script type="text/javascript" src="/lib/lazysizes/lazysizes.min.js"></script><script type="text/javascript" src="/lib/clipboard/clipboard.min.js"></script><script type="text/javascript">window.config={"code":{"copyTitle":"Copy to clipboard","maxShownLines":10},"comment":{}};</script><script type="text/javascript" src="/js/theme.min.js"></script></body>
+</html>

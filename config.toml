@@ -1,8 +1,8 @@
 baseURL = "http://example.org/"
 # [en, zh-cn, fr, ...] determines default content language
-defaultContentLanguage = "zh-cn"
+defaultContentLanguage = "en"
 # language code
-languageCode = "zh-cn"
+languageCode = "en"
 title = "Ethfoo's Blog"
 
 # Change the default theme to be use when building the site with Hugo
@@ -39,6 +39,7 @@ ignoreErrors = ["error-remote-getjson"]
   [params.social]
     GitHub = "ethfoo"
     Email = "ethfoo@163.com"
+    RSS = true
 
 
 [menu]

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-cn">
+<html lang="en">
     <head>
 	<meta name="generator" content="Hugo 0.81.0" />
         <meta charset="utf-8">
@@ -22,7 +22,7 @@
     {
         "@context": "http://schema.org",
         "@type": "WebSite",
-        "url": "http:\/\/example.org\/","inLanguage": "zh-cn","author": {
+        "url": "http:\/\/example.org\/","inLanguage": "en","author": {
                 "@type": "Person",
                 "name": "ethfoo"
             },"name": "Ethfoo's Blog"
@@ -36,7 +36,7 @@
             <a href="/" title="Ethfoo&#39;s Blog">Ethfoo&#39;s Blog</a>
         </div>
         <div class="menu">
-            <div class="menu-inner"><a class="menu-item" href="/posts/"> Posts </a><a class="menu-item" href="/tags/"> Tags </a><a class="menu-item" href="/categories/"> Categories </a><span class="menu-item delimiter"></span><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+            <div class="menu-inner"><a class="menu-item" href="/posts/"> Posts </a><a class="menu-item" href="/tags/"> Tags </a><a class="menu-item" href="/categories/"> Categories </a><span class="menu-item delimiter"></span><a href="javascript:void(0);" class="menu-item theme-switch" title="Switch Theme">
                     <i class="fas fa-adjust fa-fw"></i>
                 </a>
             </div>
@@ -52,7 +52,7 @@
                 <span></span><span></span><span></span>
             </div>
         </div>
-        <div class="menu" id="menu-mobile"><a class="menu-item" href="/posts/" title="">Posts</a><a class="menu-item" href="/tags/" title="">Tags</a><a class="menu-item" href="/categories/" title="">Categories</a><a href="javascript:void(0);" class="menu-item theme-switch" title="切换主题">
+        <div class="menu" id="menu-mobile"><a class="menu-item" href="/posts/" title="">Posts</a><a class="menu-item" href="/tags/" title="">Tags</a><a class="menu-item" href="/categories/" title="">Categories</a><a href="javascript:void(0);" class="menu-item theme-switch" title="Switch Theme">
                 <i class="fas fa-adjust fa-fw"></i>
             </a></div>
     </div>
@@ -71,29 +71,10 @@
         data-srcset="/images/avatar.jpeg, /images/avatar.jpeg 1.5x, /images/avatar.jpeg 2x"
         data-sizes="auto"
         alt="/images/avatar.jpeg"
-        title="/images/avatar.jpeg" /></a></div><h2 class="home-subtitle"><div id="id-1" class="typeit"></div></h2><div class="links"><a href="https://github.com/ethfoo" title="GitHub" target="_blank" rel="noopener noreffer me"><i class="fab fa-github-alt fa-fw"></i></a><a href="mailto:ethfoo@163.com" title="Email" rel=" me"><i class="far fa-envelope fa-fw"></i></a></div></div>
+        title="/images/avatar.jpeg" /></a></div><h2 class="home-subtitle"><div id="id-1" class="typeit"></div></h2><div class="links"><a href="https://github.com/ethfoo" title="GitHub" target="_blank" rel="noopener noreffer me"><i class="fab fa-github-alt fa-fw"></i></a><a href="mailto:ethfoo@163.com" title="Email" rel=" me"><i class="far fa-envelope fa-fw"></i></a><a href="/index.xml" title="RSS" target="_blank" rel="noopener noreffer me"><i class="fas fa-rss fa-fw"></i></a></div></div>
 <article class="single summary" itemscope itemtype="http://schema.org/Article"><h1 class="single-title" itemprop="name headline">
-        <a href="/posts/%E5%AE%B9%E5%99%A8%E6%97%A5%E5%BF%97%E9%87%87%E9%9B%86%E5%88%A9%E5%99%A8filebeat%E6%B7%B1%E5%BA%A6%E5%89%96%E6%9E%90%E4%B8%8E%E5%AE%9E%E8%B7%B5/">容器日志采集利器：Filebeat深度剖析与实践</a>
-    </h1><div class="post-meta"><span class="post-author"><a href="https://github.com/ethfoo" title="Author" target="_blank" rel="noopener noreffer author" class="author"><i class="fas fa-user-circle fa-fw"></i>ethfoo</a></span>&nbsp;<span class="post-publish">发布于 <time datetime="2020-09-04">2020-09-04</time></span>&nbsp;<span class="post-category">收录于 <a href="/categories/logging/"><i class="far fa-folder fa-fw"></i>logging</a></span></div><div class="content">在云原生时代和容器化浪潮中，容器的日志采集是一个看起来不起眼却又无法忽视的重要议题。对于容器日志采集我们常用的工具有Filebeat和Fluentd，两者对比各有优劣，相比基于ruby的Fluentd，考虑到可定制性，我们一般默认选择golang技术栈的Filebeat作为主力的日志采集agent。
-相比较传统的日志采集方式，容器化下单节点会运行更多的服务，负载也会有更短的生命周期，而这些更容易对日志采集agent造成压力，虽然Filebeat足够轻量级和高性能，但如果不了解Filebeat的机制，不合理的配置Filebeat，实际的生产环境使用中可能也会给我们带来意想不到的麻烦和难题。
-整体架构 日志采集的功能看起来不复杂，主要功能无非就是找到配置的日志文件，然后读取并处理，发送至相应的后端如elasticsearch,kafka等。
-Filebeat官网有张示意图，如下所示：
-针对每个日志文件，Filebeat都会启动一个harvester协程，即一个goroutine，在该goroutine中不停的读取日志文件，直到文件的EOF末尾。一个最简单的表示采集目录的input配置大概如下所示：
-filebeat.inputs:- type:log# Paths that should be crawled and fetched. Glob based paths.paths:- /var/log/*.log不同的harvester goroutine采集到的日志数据都会发送至一个全局的队列queue中，queue的实现有两种：基于内存和基于磁盘的队列，目前基于磁盘的队列还是处于alpha阶段，Filebeat默认启用的是基于内存的缓存队列。
-每当队列中的数据缓存到一定的大小或者超过了定时的时间（默认1s)，会被注册的client从队列中消费，发送至配置的后端。目前可以设置的client有kafka、elasticsearch、redis等。
-虽然这一切看着挺简单，但在实际使用中，我们还是需要考虑更多的问题，例如：
- 日志文件是如何被filbebeat发现又是如何被采集的？ Filebeat是如何确保日志采集发送到远程的存储中，不丢失一条数据的？ 如果Filebeat挂掉，下次采集如何确保从上次的状态开始而不会重新采集所有日志？ Filebeat的内存或者cpu占用过多，该如何分析解决？ Filebeat如何支持docker和kubernetes，如何配置容器化下的日志采集？ 想让Filebeat采集的日志发送至的后端存储，如果原生不支持，怎样定制化开发？  这些均需要对Filebeat有更深入的理解，下面让我们跟随Filebeat的源码一起探究其中的实现机制。
-一条日志是如何被采集的 Filebeat源码归属于beats项目，而beats项目的设计初衷是为了采集各类的数据，所以beats抽象出了一个libbeat库，基于libbeat我们可以快速的开发实现一个采集的工具，除了Filebeat，还有像metricbeat、packetbeat等官方的项目也是在beats工程中。
-如果我们大致看一下代码就会发现，libbeat已经实现了内存缓存队列memqueue、几种output日志发送客户端，数据的过滤处理processor等通用功能，而Filebeat只需要实现日志文件的读取等和日志相关的逻辑即可。
-从代码的实现角度来看，Filebeat大概可以分以下几个模块：
- input: 找到配置的日志文件，启动harvester harvester: 读取文件，发送至spooler spooler: 缓存日志数据，直到可以发送至publisher publisher: 发送日志至后端，同时通知registrar registrar: 记录日志文件被采集的状态  1. 找到日志文件 对于日志文件的采集和生命周期管理，Filebeat抽象出一个Crawler的结构体， 在Filebeat启动后，crawler会根据配置创建，然后遍历并运行每个input：
-for _, inputConfig := range c.inputConfigs { err := c.startInput(pipeline, inputConfig, r.GetStates()) } 在每个input运行的逻辑里，首先会根据配置获取匹配的日志文件，需要注意的是，这里的匹配方式并非正则，而是采用linux glob的规则，和正则还是有一些区别。
-matches, err := filepath.Glob(path) 获取到了所有匹配的日志文件之后，会经过一些复杂的过滤，例如如果配置了exclude_files则会忽略这类文件，同时还会查询文件的状态，如果文件的最近一次修改时间大于ignore_older的配置，也会不去采集该文件。</div><div class="post-footer">
-        <a href="/posts/%E5%AE%B9%E5%99%A8%E6%97%A5%E5%BF%97%E9%87%87%E9%9B%86%E5%88%A9%E5%99%A8filebeat%E6%B7%B1%E5%BA%A6%E5%89%96%E6%9E%90%E4%B8%8E%E5%AE%9E%E8%B7%B5/">阅读全文</a><div class="post-tags">
-                <i class="fas fa-tags fa-fw"></i>&nbsp;<a href="/tags/filebeat/">filebeat</a>,&nbsp;<a href="/tags/logging/">logging</a></div></div>
-</article><article class="single summary" itemscope itemtype="http://schema.org/Article"><h1 class="single-title" itemprop="name headline">
-        <a href="/posts/knative%E4%B9%8B%E8%87%AA%E5%8A%A8%E6%89%A9%E7%BC%A9%E5%AE%B9/">从HPA到KPA：Knative自动扩缩容深度分析</a>
-    </h1><div class="post-meta"><span class="post-author"><a href="https://github.com/ethfoo" title="Author" target="_blank" rel="noopener noreffer author" class="author"><i class="fas fa-user-circle fa-fw"></i>ethfoo</a></span>&nbsp;<span class="post-publish">发布于 <time datetime="2020-05-09">2020-05-09</time></span>&nbsp;<span class="post-category">收录于 <a href="/categories/serverless/"><i class="far fa-folder fa-fw"></i>serverless</a></span></div><div class="content">上篇文章主要聊的是流量和网络问题，这里我们探讨一下另外一个Knative的核心功能：自动扩缩容。本文只打算围绕一个核心的问题进行深入分析，即如何设计一个自动扩缩容系统，以及Knative又是如何实现的？
+        <a href="/posts/serverless/knative%E4%B9%8B%E8%87%AA%E5%8A%A8%E6%89%A9%E7%BC%A9%E5%AE%B9/">从HPA到KPA：Knative自动扩缩容深度分析</a>
+    </h1><div class="post-meta"><span class="post-author"><a href="https://github.com/ethfoo" title="Author" target="_blank" rel="noopener noreffer author" class="author"><i class="fas fa-user-circle fa-fw"></i>ethfoo</a></span>&nbsp;<span class="post-publish">published on <time datetime="2020-07-01">2020-07-01</time></span>&nbsp;<span class="post-category">included in <a href="/categories/serverless/"><i class="far fa-folder fa-fw"></i>serverless</a></span></div><div class="content">上篇文章主要聊的是流量和网络问题，这里我们探讨一下另外一个Knative的核心功能：自动扩缩容。本文只打算围绕一个核心的问题进行深入分析，即如何设计一个自动扩缩容系统，以及Knative又是如何实现的？
 如何设计一个自动扩缩容系统  自动扩缩容其实是一个相对广义的概念，这里我们只关注服务副本数的自动扩缩容，集群扩缩容和VPA则不会涉及。
  假设一下，如果让我们自研一个完善的自动扩缩容系统，会如何去实现呢？首先大致可以将要解决的问题抽象成以下几点：
  有哪些Metrics数据来决定扩缩容？ 如何采集这些Metrics数据？ 如何设计一个合理的自动扩缩容算法？  在Kubernetes集群下的自动扩缩容，很多人马上会联想到HPA，如果基于HPA来设计一个自动扩缩容系统，会面临什么样的挑战？
@@ -114,11 +95,37 @@ Activator Activator的引入，最开始的目的是在冷启动的时候，由�
 有哪些Metrics数据? HPA的Metrics来源一般是Pod的CPU或者Memory，当然也支持自定义的Metrics数据，不过对于大部分在线业务来说，并非CPU密集型，而是IO密集型，这意味着单纯依赖CPU来自动扩缩容往往并不满足实际需求，可能工作负载接收的流量已经很大了，延迟已经很高了，但是HPA还没有帮我们扩容服务。
 为了更好的满足这种情况，Knative KPA自动扩缩容则设计支持了请求并发（concurrency）和RPS（request-per-second）两种Metrics数据，相比CPU数据，这两者更贴近负载的load，更适合描述在线业务。数据源来自Activator组件和每个工作负载Pod，当然工作负载的Pod数据由Queue-proxy sidecar暴露出Metrics接口。
 RPS比较好理解，在一个采集周期内（默认1s），来一次http request，计数加1即可，比如1s内检测到来了100个请求，那么RPS就是100。 Concurrency可以理解为一个采集周期内正在处理http request的数量，比如1s内有50个请求正在被处理则Concurrency为50。实际上Knative会记录request来的时刻和返回的时刻，如果1s内只有一个请求，并且处理了500ms即返回，则Concurrency为0.</div><div class="post-footer">
-        <a href="/posts/knative%E4%B9%8B%E8%87%AA%E5%8A%A8%E6%89%A9%E7%BC%A9%E5%AE%B9/">阅读全文</a><div class="post-tags">
+        <a href="/posts/serverless/knative%E4%B9%8B%E8%87%AA%E5%8A%A8%E6%89%A9%E7%BC%A9%E5%AE%B9/">Read More</a><div class="post-tags">
                 <i class="fas fa-tags fa-fw"></i>&nbsp;<a href="/tags/serverless/">serverless</a>,&nbsp;<a href="/tags/knative/">knative</a></div></div>
 </article><article class="single summary" itemscope itemtype="http://schema.org/Article"><h1 class="single-title" itemprop="name headline">
-        <a href="/posts/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98/">Knative全链路流量机制探索与揭秘</a>
-    </h1><div class="post-meta"><span class="post-author"><a href="https://github.com/ethfoo" title="Author" target="_blank" rel="noopener noreffer author" class="author"><i class="fas fa-user-circle fa-fw"></i>ethfoo</a></span>&nbsp;<span class="post-publish">发布于 <time datetime="2020-04-05">2020-04-05</time></span>&nbsp;<span class="post-category">收录于 <a href="/categories/serverless/"><i class="far fa-folder fa-fw"></i>serverless</a></span></div><div class="content">引子——从自动扩缩容说起 服务接收到流量请求后，从0自动扩容为N，以及没有流量时自动缩容为0，是Serverless平台最核心的一个特征。
+        <a href="/posts/logging/%E5%9F%BA%E4%BA%8Egolang%E7%9A%84%E4%BA%91%E5%8E%9F%E7%94%9F%E6%97%A5%E5%BF%97%E9%87%87%E9%9B%86%E6%9C%8D%E5%8A%A1%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E8%B7%B5/">基于Golang的云原生日志采集服务设计与实践</a>
+    </h1><div class="post-meta"><span class="post-author"><a href="https://github.com/ethfoo" title="Author" target="_blank" rel="noopener noreffer author" class="author"><i class="fas fa-user-circle fa-fw"></i>ethfoo</a></span>&nbsp;<span class="post-publish">published on <time datetime="2020-03-12">2020-03-12</time></span>&nbsp;<span class="post-category">included in <a href="/categories/logging/"><i class="far fa-folder fa-fw"></i>logging</a></span></div><div class="content">本文基于笔者 2019 Golang meetup 杭州站分享整理
+ 一、背景 云原生技术大潮已经来临，技术变革迫在眉睫。
+在这股技术潮流之中，网易推出了轻舟微服务云平台，集成了微服务、Servicemesh、容器云、DevOps等，已经广泛应用于公司集团内部，同时也支撑了很多外部客户的云原生化改造和迁移。
+在这其中，日志是平时很容易被人忽视的一部分，却是微服务、DevOps的重要一环。没有日志，服务问题排查无从谈起，同时日志的统一采集也是很多业务数据分析、处理、审计的基础。
+但是在云原生容器化环境下，日志的采集又变得有点不同。
+二、容器日志采集的痛点 传统主机模式 对于传统的物理机或者虚拟机部署的服务，日志采集工作清晰明了。
+业务日志直接输出到宿主机上，服务运行在固定的节点上，手动或者拿自动化工具把日志采集agent部署在节点上，加一下agent的配置，然后就可以开始采集日志了。同时为了方便后续的日志配置修改，还可以引入一个配置中心，用来下发agent配置。
+Kubernetes环境 而在Kubernetes环境中，情况就没这么简单了。
+一个Kubernetes node节点上有很多不同服务的容器在运行，容器的日志存储方式有很多不同的类型，例如stdout、hostPath、emptyDir、pv等。由于在Kubernetes集群中经常存在Pod主动或者被动的迁移，频繁的销毁、创建，我们无法和传统的方式一样人为的给每个服务下发日志采集配置。另外，由于日志数据采集后会被集中存储，所以查询日志时，可以根据namespace、pod、container、node，甚至包括容器的环境变量、label等维度来检索、过滤很重要。
+以上都是有别于传统日志采集配置方式的需求和痛点，究其原因，还是因为传统的方式脱离了Kubernetes，无法感知Kubernetes，更无法和Kubernetes集成。
+随着最近几年的迅速发展，Kubernetes已经成为容器编排的事实标准，甚至可以被认为是新一代的分布式操作系统。在这个新型的操作系统中，controller的设计思路驱动了整个系统的运行。controller的抽象解释如下图所示：
+由于Kubernetes良好的可扩展性，Kubernetes设计了一种自定义资源CRD的概念，用户可以自己定义各种资源，并借助一些framework开发controller，使用controller将我们的期望变成现实。
+基于这个思路，对于日志采集来说，一个服务需要采集哪些日志，需要什么样的日志配置，是用户的期望，而这一切，就需要我们开发一个日志采集的controller去实现。
+三、探索与架构设计 有了上面的解决思路，除了开发一个controller，剩下的就是围绕着这个思路的一些选型分析。
+日志采集agent选型 日志采集controller只负责对接Kubernetes，生成采集配置，并不负责真正的日志采集。目前市面上的日志采集agent有很多，例如传统ELK技术栈的Logstash，CNCF已毕业项目Fluentd，最近推出不久的Loki，还有beats系列的Filebeat。 下面简单分析一下。
+ Logstash基于JVM，分分钟内存占用达到几百MB甚至上GB，有点重，首先被我们排除。 Fluentd背靠CNCF看着不错，各种插件也多，不过基于Ruby和C编写，对于我们团队的技术栈来说，还是让人止于观望。虽然Fluentd还推出了存粹基于C语言的Fluentd-bit项目，内存占用很小，看着十分诱惑，但是使用C语言和不能动态reload配置，还是无法令人亲近。 Loki推出的时间不久，目前还是功能有限，而且一些压测数据表明性能不太好，暂持观望。 Filebeat和Logstash、Kibana、Elasticsearch同属Elastic公司，轻量级日志采集agent，推出就是为了替换Logstash，基于Golang编写，和我们团队技术栈完美契合，实测下来个方面性能、资源占用率都比较优秀，于是成为了我们日志采集agent第一选择。  agent集成方式 对于日志采集agent，在Kubernetes环境下一般有两种部署方式。
+ 一种为sidecar的方式，即和业务container部署在同一个Pod里，这种方式下，Filebeat只采集该业务container的日志，也只需配置该container的日志配置，简单、隔离性好，但最大的问题是， 每个服务都要有一个Filebeat去采集，通常一个节点上有很多的Pod，加起来的内存等开销不容乐观。 另外一种也是最常见的每个Node上部署一个Filebeat容器，相比而言，内存占用一般要小很多，而且对Pod无侵入性，比较符合我们的常规使用方式。同时一般使用Kubernetes的DaemonSet部署，免去了传统的类似Ansible等自动化运维工具，部署运维效率大大提升。所以我们优先使用Daemonset部署Filebeat的方式。  整体架构 选择Filebeat作为日志采集agent，集成了自研的日志controller后，从节点的视角，我们看到的架构如下所示：
+ 日志平台下发具体的CRD实例到Kubernetes集群中，日志controller Ripple则负责从Kubernetes中List&amp;Watch Pod和CRD实例。 通过Ripple的过滤、聚合最终生成一个Filebeat的input配置文件，配置文件里描述了服务的采集Path路径、多行日志匹配等配置，同时还会默认把例如PodName、Hostname等配置到日志元信息中。 Filebeat则根据Ripple生成的配置，自动reload并采集节点上的日志，发送至Kafka或者Elasticsearch等。  由于Ripple监听了Kubernetes事件，可以感知到Pod的生命周期，不管Pod销毁还是调度到任意的节点，依然能够自动生成相应的Filebeat配置，无需人工干预。
+Ripple能感知到Pod挂载的日志Volume，不管是docker Stdout的日志，还是使用HostPath、EmptyDir、Pv存储日志，均可以生成节点上的日志路径，告知Filebeat去采集。
+Ripple可以同时获取CRD和Pod的信息，所以除了默认给日志配置加上PodName等元信息外，还可以结合容器环境变量、Pod label、Pod Annotation等给日志打标，方便后续日志的过滤、检索查询。 除此之外，我们还给Ripple加入了日志定时清理，确保日志不丢失等功能，进一步增强了日志采集的功能和稳定性。
+四、基于Filebeat的实践 功能扩展 一般情况下Filebeat可满足大部分的日志采集需求，但是仍然避免不了一些特殊的场景需要我们对Filebeat进行定制化开发，当然Filebeat本身的设计也提供了良好的扩展性。 Filebeat目前只提供了像elasticsearch、Kafka、logstash等几类output客户端，如果我们想要Filebeat直接发送至其他后端，需要定制化开发自己的output。同样，如果需要对日志做过滤处理或者增加元信息，也可以自制processor插件。 无论是增加output还是写个processor，Filebeat提供的大体思路基本相同。一般来讲有3种方式：
+ 直接fork Filebeat，在现有的源码上开发。output或者processor都提供了类似Run、Stop等的接口，只需要实现该类接口，然后在init方法中注册相应的插件初始化方法即可。当然，由于Golang中init方法是在import包时才被调用，所以需要在初始化Filebeat的代码中手动import。 复制一份Filebeat的main.go，import我们自研的插件库，然后重新编译。本质上和方式1区别不大。 Filebeat还提供了基于Golang plugin的插件机制，需要把自研的插件编译成.so共享链接库，然后在Filebeat启动参数中通过-plugin指定库所在路径。不过实际上一方面Golang plugin还不够成熟稳定，一方面自研的插件依然需要依赖相同版本的libbeat库，而且还需要相同的Golang版本编译，坑可能更多，不太推荐。</div><div class="post-footer">
+        <a href="/posts/logging/%E5%9F%BA%E4%BA%8Egolang%E7%9A%84%E4%BA%91%E5%8E%9F%E7%94%9F%E6%97%A5%E5%BF%97%E9%87%87%E9%9B%86%E6%9C%8D%E5%8A%A1%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E8%B7%B5/">Read More</a><div class="post-tags">
+                <i class="fas fa-tags fa-fw"></i>&nbsp;<a href="/tags/logging/">logging</a>,&nbsp;<a href="/tags/golang/">golang</a></div></div>
+</article><article class="single summary" itemscope itemtype="http://schema.org/Article"><h1 class="single-title" itemprop="name headline">
+        <a href="/posts/serverless/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98/">Knative全链路流量机制探索与揭秘</a>
+    </h1><div class="post-meta"><span class="post-author"><a href="https://github.com/ethfoo" title="Author" target="_blank" rel="noopener noreffer author" class="author"><i class="fas fa-user-circle fa-fw"></i>ethfoo</a></span>&nbsp;<span class="post-publish">published on <time datetime="2020-03-07">2020-03-07</time></span>&nbsp;<span class="post-category">included in <a href="/categories/serverless/"><i class="far fa-folder fa-fw"></i>serverless</a></span></div><div class="content">引子——从自动扩缩容说起 服务接收到流量请求后，从0自动扩容为N，以及没有流量时自动缩容为0，是Serverless平台最核心的一个特征。
 可以说，自动扩缩容机制是那颗皇冠，戴上之后才能被称之为Serverless。
 当然了解Kubernetes的人会有疑问，HPA不就是用来干自动扩缩容的事儿的吗？难道我用了HPA就可以摇身一变成为Serverless了。
 这里有一点关键的区别在于，Serverless语义下的自动扩缩容是可以让服务从0到N的，但是HPA不能。HPA的机制是检测服务Pod的metrics数据（例如CPU等）然后把Deployment扩容，但当你把Deployment副本数置为0时，流量进不来，metrics数据永远为0，此时HPA也无能为力。
@@ -137,19 +144,49 @@ apiVersion:networking.istio.io/v1alpha3kind:VirtualServicemetadata:name:route-f8
 下面以0.9版本为例，我们仔细探究一下现有的实现方式，和关于Knative流量的真正秘密。
 复杂但是更优异的新版流量机制 鉴于官方文档并没有最新的具体实现机制介绍，我们创建一个简单的hello-go ksvc，并以此进行分析。ksvc如下所示：
 apiVersion: serving.knative.dev/v1alpha1 kind: Service metadata: name: hello-go namespace: faas spec: template: spec: containers: - image: harbor-yx-jd-dev.yx.netease.com/library/helloworld-go:v0.1 env: - name: TARGET value: &quot;Go Sample v1&quot; virtualservice的变化 笔者的环境可简单的认为是一个标准的Istio部署，Serverless网关为Istio Ingress Gateway，所以创建完ksvc后，为了验证服务是否可以正常运行，需要发送http请求至网关。Gateway资源已经在部署Knative的时候创建，这里我们只需要关心vs。在服务副本数为0的时候，Knative控制器创建的vs关键配置如下：</div><div class="post-footer">
-        <a href="/posts/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98/">阅读全文</a><div class="post-tags">
+        <a href="/posts/serverless/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98/">Read More</a><div class="post-tags">
                 <i class="fas fa-tags fa-fw"></i>&nbsp;<a href="/tags/serverless/">serverless</a>,&nbsp;<a href="/tags/knative/">knative</a></div></div>
+</article><article class="single summary" itemscope itemtype="http://schema.org/Article"><h1 class="single-title" itemprop="name headline">
+        <a href="/posts/cicd/kubernetes%E5%8E%9F%E7%94%9Fcicd%E5%B7%A5%E5%85%B7tekton%E6%8E%A2%E7%A7%98%E4%B8%8E%E4%B8%8A%E6%89%8B%E5%AE%9E%E8%B7%B5/">Kubernetes原生CICD工具：Tekton探秘与上手实践</a>
+    </h1><div class="post-meta"><span class="post-author"><a href="https://github.com/ethfoo" title="Author" target="_blank" rel="noopener noreffer author" class="author"><i class="fas fa-user-circle fa-fw"></i>ethfoo</a></span>&nbsp;<span class="post-publish">published on <time datetime="2019-08-25">2019-08-25</time></span>&nbsp;<span class="post-category">included in <a href="/categories/cicd/"><i class="far fa-folder fa-fw"></i>CICD</a></span></div><div class="content">引子 如果有关注过Knative社区动态的同学，可能会知道最近发生了一件比较大的新闻，三大组件之一的build项目被人提了一个很残忍的Proposal（https://github.com/knative/build/issues/614），并且专门在项目Readme的开头加了个NOTE：
+Note  🚨 NOTE: There is an open proposal to deprecate this component in favor of Tekton Pipelines. If you are a new user, consider using Tekton Pipelines, or another tool, to build and release. If you use Knative Build today, please give feedback on the deprecation proposal.   这个Proposal的目的是想要废弃Knative的build模块，Knative只专注做serverless，而将build模块代表的CI/CD功能全盘交出，让用户自己选择合适的CI/CD工具。Knative只负责将镜像运行，同时提供serverless相关的事件驱动等功能，不再关心镜像的构建过程。
+虽然目前为止，该Proposal还在开放征求社区的意见，不过，从留言来看，build模块未来还是大概率会被deprecate。因为Knative build的替代者Tekton已经展露头脚，表现出更强大的基于kubernetes的CI/CD能力，Tekton的设计思路其实也是来源于Knative build的，现有用户也可以很方便的从build迁移至Tekton。
+Tekton是什么 Tekton是一个谷歌开源的kubernetes原生CI/CD系统，功能强大且灵活，开源社区也正在快速的迭代和发展壮大。google cloud已经推出了基于Tekton的服务（https://cloud.google.com/Tekton/）。
+其实Tekton的前身是Knative的build-pipeline项目，从名字可以看出这个项目是为了给build模块增加pipeline的功能，但是大家发现随着不同的功能加入到Knative build模块中，build模块越来越变得像一个通用的CI/CD系统，这已经脱离了Knative build设计的初衷，于是，索性将build-pipeline剥离出Knative，摇身一变成为Tekton，而Tekton也从此致力于提供全功能、标准化的原生kubernetesCI/CD解决方案。
+Tekton虽然还是一个挺新的项目，但是已经成为 Continuous Delivery Foundation (CDF) 的四个初始项目之一，另外三个则是大名鼎鼎的Jenkins、Jenkins X、Spinnaker，实际上Tekton还可以作为插件集成到JenkinsX中。所以，如果你觉得Jenkins太重，没必要用Spinnaker这种专注于多云平台的CD，为了避免和Gitlab耦合不想用gitlab-ci，那么Tekton值得一试。
+Tekton的特点是kubernetes原生，什么是kubernetes原生呢？简单的理解，就是all in kubernetes，所以用容器化的方式构建容器镜像是必然，另外，基于kubernetes CRD定义的pipeline流水线也是Tekton最重要的特征。</div><div class="post-footer">
+        <a href="/posts/cicd/kubernetes%E5%8E%9F%E7%94%9Fcicd%E5%B7%A5%E5%85%B7tekton%E6%8E%A2%E7%A7%98%E4%B8%8E%E4%B8%8A%E6%89%8B%E5%AE%9E%E8%B7%B5/">Read More</a><div class="post-tags">
+                <i class="fas fa-tags fa-fw"></i>&nbsp;<a href="/tags/cicd/">CICD</a>,&nbsp;<a href="/tags/devops/">DevOps</a>,&nbsp;<a href="/tags/tekton/">Tekton</a></div></div>
+</article><article class="single summary" itemscope itemtype="http://schema.org/Article"><h1 class="single-title" itemprop="name headline">
+        <a href="/posts/logging/%E5%AE%B9%E5%99%A8%E6%97%A5%E5%BF%97%E9%87%87%E9%9B%86%E5%88%A9%E5%99%A8filebeat%E6%B7%B1%E5%BA%A6%E5%89%96%E6%9E%90%E4%B8%8E%E5%AE%9E%E8%B7%B5/">容器日志采集利器：Filebeat深度剖析与实践</a>
+    </h1><div class="post-meta"><span class="post-author"><a href="https://github.com/ethfoo" title="Author" target="_blank" rel="noopener noreffer author" class="author"><i class="fas fa-user-circle fa-fw"></i>ethfoo</a></span>&nbsp;<span class="post-publish">published on <time datetime="2019-07-13">2019-07-13</time></span>&nbsp;<span class="post-category">included in <a href="/categories/logging/"><i class="far fa-folder fa-fw"></i>logging</a></span></div><div class="content">在云原生时代和容器化浪潮中，容器的日志采集是一个看起来不起眼却又无法忽视的重要议题。对于容器日志采集我们常用的工具有Filebeat和Fluentd，两者对比各有优劣，相比基于ruby的Fluentd，考虑到可定制性，我们一般默认选择golang技术栈的Filebeat作为主力的日志采集agent。
+相比较传统的日志采集方式，容器化下单节点会运行更多的服务，负载也会有更短的生命周期，而这些更容易对日志采集agent造成压力，虽然Filebeat足够轻量级和高性能，但如果不了解Filebeat的机制，不合理的配置Filebeat，实际的生产环境使用中可能也会给我们带来意想不到的麻烦和难题。
+整体架构 日志采集的功能看起来不复杂，主要功能无非就是找到配置的日志文件，然后读取并处理，发送至相应的后端如elasticsearch,kafka等。
+Filebeat官网有张示意图，如下所示：
+针对每个日志文件，Filebeat都会启动一个harvester协程，即一个goroutine，在该goroutine中不停的读取日志文件，直到文件的EOF末尾。一个最简单的表示采集目录的input配置大概如下所示：
+filebeat.inputs:- type:log# Paths that should be crawled and fetched. Glob based paths.paths:- /var/log/*.log不同的harvester goroutine采集到的日志数据都会发送至一个全局的队列queue中，queue的实现有两种：基于内存和基于磁盘的队列，目前基于磁盘的队列还是处于alpha阶段，Filebeat默认启用的是基于内存的缓存队列。
+每当队列中的数据缓存到一定的大小或者超过了定时的时间（默认1s)，会被注册的client从队列中消费，发送至配置的后端。目前可以设置的client有kafka、elasticsearch、redis等。
+虽然这一切看着挺简单，但在实际使用中，我们还是需要考虑更多的问题，例如：
+ 日志文件是如何被filbebeat发现又是如何被采集的？ Filebeat是如何确保日志采集发送到远程的存储中，不丢失一条数据的？ 如果Filebeat挂掉，下次采集如何确保从上次的状态开始而不会重新采集所有日志？ Filebeat的内存或者cpu占用过多，该如何分析解决？ Filebeat如何支持docker和kubernetes，如何配置容器化下的日志采集？ 想让Filebeat采集的日志发送至的后端存储，如果原生不支持，怎样定制化开发？  这些均需要对Filebeat有更深入的理解，下面让我们跟随Filebeat的源码一起探究其中的实现机制。
+一条日志是如何被采集的 Filebeat源码归属于beats项目，而beats项目的设计初衷是为了采集各类的数据，所以beats抽象出了一个libbeat库，基于libbeat我们可以快速的开发实现一个采集的工具，除了Filebeat，还有像metricbeat、packetbeat等官方的项目也是在beats工程中。
+如果我们大致看一下代码就会发现，libbeat已经实现了内存缓存队列memqueue、几种output日志发送客户端，数据的过滤处理processor等通用功能，而Filebeat只需要实现日志文件的读取等和日志相关的逻辑即可。
+从代码的实现角度来看，Filebeat大概可以分以下几个模块：
+ input: 找到配置的日志文件，启动harvester harvester: 读取文件，发送至spooler spooler: 缓存日志数据，直到可以发送至publisher publisher: 发送日志至后端，同时通知registrar registrar: 记录日志文件被采集的状态  1. 找到日志文件 对于日志文件的采集和生命周期管理，Filebeat抽象出一个Crawler的结构体， 在Filebeat启动后，crawler会根据配置创建，然后遍历并运行每个input：
+for _, inputConfig := range c.inputConfigs { err := c.startInput(pipeline, inputConfig, r.GetStates()) } 在每个input运行的逻辑里，首先会根据配置获取匹配的日志文件，需要注意的是，这里的匹配方式并非正则，而是采用linux glob的规则，和正则还是有一些区别。
+matches, err := filepath.Glob(path) 获取到了所有匹配的日志文件之后，会经过一些复杂的过滤，例如如果配置了exclude_files则会忽略这类文件，同时还会查询文件的状态，如果文件的最近一次修改时间大于ignore_older的配置，也会不去采集该文件。</div><div class="post-footer">
+        <a href="/posts/logging/%E5%AE%B9%E5%99%A8%E6%97%A5%E5%BF%97%E9%87%87%E9%9B%86%E5%88%A9%E5%99%A8filebeat%E6%B7%B1%E5%BA%A6%E5%89%96%E6%9E%90%E4%B8%8E%E5%AE%9E%E8%B7%B5/">Read More</a><div class="post-tags">
+                <i class="fas fa-tags fa-fw"></i>&nbsp;<a href="/tags/filebeat/">filebeat</a>,&nbsp;<a href="/tags/logging/">logging</a></div></div>
 </article></div></div>
             </main><footer class="footer">
-        <div class="footer-container"><div class="footer-line">由 <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.81.0">Hugo</a> 强力驱动 | 主题 - <a href="https://github.com/dillonzq/LoveIt" target="_blank" rel="noopener noreffer" title="LoveIt 0.2.10"><i class="far fa-kiss-wink-heart fa-fw"></i> LoveIt</a>
+        <div class="footer-container"><div class="footer-line">Powered by <a href="https://gohugo.io/" target="_blank" rel="noopener noreffer" title="Hugo 0.81.0">Hugo</a> | Theme - <a href="https://github.com/dillonzq/LoveIt" target="_blank" rel="noopener noreffer" title="LoveIt 0.2.10"><i class="far fa-kiss-wink-heart fa-fw"></i> LoveIt</a>
                 </div><div class="footer-line"><i class="far fa-copyright fa-fw"></i><span itemprop="copyrightYear">2021</span><span class="author" itemprop="copyrightHolder">&nbsp;<a href="https://github.com/ethfoo" target="_blank">ethfoo</a></span></div>
         </div>
     </footer></div>
 
-        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="回到顶部">
+        <div id="fixed-buttons"><a href="#" id="back-to-top" class="fixed-button" title="Back to Top">
                 <i class="fas fa-arrow-up fa-fw"></i>
-            </a><a href="#" id="view-comments" class="fixed-button" title="查看评论">
+            </a><a href="#" id="view-comments" class="fixed-button" title="View Comments">
                 <i class="fas fa-comment fa-fw"></i>
             </a>
-        </div><script type="text/javascript" src="/lib/smooth-scroll/smooth-scroll.min.js"></script><script type="text/javascript" src="/lib/lazysizes/lazysizes.min.js"></script><script type="text/javascript" src="/lib/clipboard/clipboard.min.js"></script><script type="text/javascript" src="/lib/typeit/typeit.min.js"></script><script type="text/javascript">window.config={"code":{"copyTitle":"复制到剪贴板","maxShownLines":10},"data":{"id-1":"core dump"},"typeit":{"cursorChar":null,"cursorSpeed":null,"data":{"id-1":["id-1"]},"duration":null,"speed":null}};</script><script type="text/javascript" src="/js/theme.min.js"></script></body>
+        </div><script type="text/javascript" src="/lib/smooth-scroll/smooth-scroll.min.js"></script><script type="text/javascript" src="/lib/lazysizes/lazysizes.min.js"></script><script type="text/javascript" src="/lib/clipboard/clipboard.min.js"></script><script type="text/javascript" src="/lib/typeit/typeit.min.js"></script><script type="text/javascript">window.config={"code":{"copyTitle":"Copy to clipboard","maxShownLines":10},"data":{"id-1":"core dump"},"typeit":{"cursorChar":null,"cursorSpeed":null,"data":{"id-1":["id-1"]},"duration":null,"speed":null}};</script><script type="text/javascript" src="/js/theme.min.js"></script></body>
 </html>

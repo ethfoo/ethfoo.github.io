@@ -1,15 +1,15 @@
 <rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
     <channel>
-        <title>knative - 标签 - Ethfoo&#39;s Blog</title>
+        <title>knative - Tag - Ethfoo&#39;s Blog</title>
         <link>http://example.org/tags/knative/</link>
-        <description>knative - 标签 - Ethfoo&#39;s Blog</description>
-        <generator>Hugo -- gohugo.io</generator><language>zh-cn</language><managingEditor>ethfoo@163.com (ethfoo)</managingEditor>
-            <webMaster>ethfoo@163.com (ethfoo)</webMaster><lastBuildDate>Sat, 09 May 2020 21:40:32 &#43;0800</lastBuildDate><atom:link href="http://example.org/tags/knative/" rel="self" type="application/rss+xml" /><item>
+        <description>knative - Tag - Ethfoo&#39;s Blog</description>
+        <generator>Hugo -- gohugo.io</generator><language>en</language><managingEditor>ethfoo@163.com (ethfoo)</managingEditor>
+            <webMaster>ethfoo@163.com (ethfoo)</webMaster><lastBuildDate>Wed, 01 Jul 2020 21:40:32 &#43;0800</lastBuildDate><atom:link href="http://example.org/tags/knative/" rel="self" type="application/rss+xml" /><item>
     <title>从HPA到KPA：Knative自动扩缩容深度分析</title>
-    <link>http://example.org/posts/knative%E4%B9%8B%E8%87%AA%E5%8A%A8%E6%89%A9%E7%BC%A9%E5%AE%B9/</link>
-    <pubDate>Sat, 09 May 2020 21:40:32 &#43;0800</pubDate>
-    <author>作者</author>
-    <guid>http://example.org/posts/knative%E4%B9%8B%E8%87%AA%E5%8A%A8%E6%89%A9%E7%BC%A9%E5%AE%B9/</guid>
+    <link>http://example.org/posts/serverless/knative%E4%B9%8B%E8%87%AA%E5%8A%A8%E6%89%A9%E7%BC%A9%E5%AE%B9/</link>
+    <pubDate>Wed, 01 Jul 2020 21:40:32 &#43;0800</pubDate>
+    <author>Author</author>
+    <guid>http://example.org/posts/serverless/knative%E4%B9%8B%E8%87%AA%E5%8A%A8%E6%89%A9%E7%BC%A9%E5%AE%B9/</guid>
     <description><![CDATA[上篇文章主要聊的是流量和网络问题，这里我们探讨一下另外一个Knative的核心功能：自动扩缩容。本文只打算围绕一个核心的问题进行深入分析，即如何设计一个自动扩缩容系统，以及Knative又是如何实现的？
 如何设计一个自动扩缩容系统  自动扩缩容其实是一个相对广义的概念，这里我们只关注服务副本数的自动扩缩容，集群扩缩容和VPA则不会涉及。
  假设一下，如果让我们自研一个完善的自动扩缩容系统，会如何去实现呢？首先大致可以将要解决的问题抽象成以下几点：
@@ -33,10 +33,10 @@ Activator Activator的引入，最开始的目的是在冷启动的时候，由�
 RPS比较好理解，在一个采集周期内（默认1s），来一次http request，计数加1即可，比如1s内检测到来了100个请求，那么RPS就是100。 Concurrency可以理解为一个采集周期内正在处理http request的数量，比如1s内有50个请求正在被处理则Concurrency为50。实际上Knative会记录request来的时刻和返回的时刻，如果1s内只有一个请求，并且处理了500ms即返回，则Concurrency为0.]]></description>
 </item><item>
     <title>Knative全链路流量机制探索与揭秘</title>
-    <link>http://example.org/posts/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98/</link>
-    <pubDate>Sun, 05 Apr 2020 09:51:34 &#43;0800</pubDate>
-    <author>作者</author>
-    <guid>http://example.org/posts/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98/</guid>
+    <link>http://example.org/posts/serverless/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98/</link>
+    <pubDate>Sat, 07 Mar 2020 09:51:34 &#43;0800</pubDate>
+    <author>Author</author>
+    <guid>http://example.org/posts/serverless/knative%E5%85%A8%E9%93%BE%E8%B7%AF%E6%B5%81%E9%87%8F%E6%9C%BA%E5%88%B6%E6%8E%A2%E7%B4%A2%E4%B8%8E%E6%8F%AD%E7%A7%98/</guid>
     <description><![CDATA[引子——从自动扩缩容说起 服务接收到流量请求后，从0自动扩容为N，以及没有流量时自动缩容为0，是Serverless平台最核心的一个特征。
 可以说，自动扩缩容机制是那颗皇冠，戴上之后才能被称之为Serverless。
 当然了解Kubernetes的人会有疑问，HPA不就是用来干自动扩缩容的事儿的吗？难道我用了HPA就可以摇身一变成为Serverless了。
